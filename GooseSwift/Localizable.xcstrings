@@ -205,6 +205,16 @@
         }
       }
     },
+    "%lld of %lld scores ready" : {
+      "localizations" : {
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld de %lld pontuações prontas"
+          }
+        }
+      }
+    },
     "%lld of %lld scores ready. Keep wearing your strap and the rest will fill in." : {
       "localizations" : {
         "pt-PT" : {
@@ -1812,6 +1822,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fechar"
+          }
+        }
+      }
+    },
+    "Close the data gaps first" : {
+      "localizations" : {
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resolva primeiro as lacunas de dados"
           }
         }
       }
@@ -4146,6 +4166,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Manter Bloqueado"
+          }
+        }
+      }
+    },
+    "Keep collecting data" : {
+      "localizations" : {
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue a recolher dados"
           }
         }
       }
@@ -6575,6 +6605,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Repetir Reconexão Monitor FC"
+          }
+        }
+      }
+    },
+    "Review today" : {
+      "localizations" : {
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reveja o dia de hoje"
           }
         }
       }
