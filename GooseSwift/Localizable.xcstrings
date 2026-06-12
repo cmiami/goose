@@ -2862,6 +2862,16 @@
         }
       }
     },
+    "Enter this code on the OpenAI device page:" : {
+      "localizations" : {
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduza este código na página de dispositivos da OpenAI:"
+          }
+        }
+      }
+    },
     "Enter weight." : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6264,6 +6274,16 @@
         }
       }
     },
+    "Requesting sign-in code…" : {
+      "localizations" : {
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A pedir código de início de sessão…"
+          }
+        }
+      }
+    },
     "Research BT Commands" : {
       "localizations" : {
         "pt-PT" : {
@@ -8584,6 +8604,16 @@
         }
       }
     },
+    "Uses OpenAI device sign-in: you'll get a code to enter in your browser. Tokens are stored in Keychain." : {
+      "localizations" : {
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usa o início de sessão por dispositivo da OpenAI: receberá um código para introduzir no navegador. Os tokens ficam guardados no Keychain."
+          }
+        }
+      }
+    },
     "V24 Biometrics" : {
       "localizations" : {
         "pt-PT" : {
@@ -8786,6 +8816,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "À espera de Bluetooth"
+          }
+        }
+      }
+    },
+    "Waiting for approval…" : {
+      "localizations" : {
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "À espera de aprovação…"
           }
         }
       }
