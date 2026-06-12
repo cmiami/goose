@@ -135,7 +135,7 @@ extension GooseAppModel {
 
       let stagingMethod = stagingResult["staging_method"] as? String ?? "no_imu_data"
       guard stagingMethod != "no_imu_data" else {
-        store?.bandSleepImportStatus = "A aguardar sincronização"
+        store?.bandSleepImportStatus = "Awaiting sync"
         return
       }
 
@@ -171,7 +171,7 @@ extension GooseAppModel {
 
       // Refresh sleep displays and set success status.
       await store?.refreshSleepAfterBandSync(packetCount: 0)
-      store?.bandSleepImportStatus = "Sincronizado da pulseira"
+      store?.bandSleepImportStatus = "Synced from band"
 
     } catch {
       store?.markBandSleepSyncFailed("Sleep sync error: \(error)")
