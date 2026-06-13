@@ -391,6 +391,7 @@ final class GooseAppModel {
     temperatureHistorySyncWorkItem?.cancel()
     autoStartHealthPacketCaptureWorkItem?.cancel()
     passiveActivityCaptureWorkItem?.cancel()
+    stepCounterPollTimer?.cancel()
   }
 
   private nonisolated func runStorageCompactionIfNeeded() {

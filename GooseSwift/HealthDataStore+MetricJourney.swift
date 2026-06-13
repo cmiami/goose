@@ -134,8 +134,15 @@ extension HealthDataStore {
       return .calibrating(have: sleepNights.nights, need: ready)
 
     case .recovery:
-      // Recovery gates on the resting-HR baseline (validated, extraction_ready),
-      // so it can legitimately reach ready.
+      // Recovery scoring (metrics.rs recovery_v0/v1) consumes hrv_rmssd_ms,
+      // whose decode is extraction_ready:false (hrv_rr_interval_scale_unverified).
+      // So recovery cannot legitimately compute until that gate is validated —
+      // it stays blocked regardless of resting-HR baseline maturity. Fail closed
+      // while the readiness report is still loading.
+      if !readiness.hasReport
+        || familyHasUnverifiedExtractionBlocker("recovery", in: readiness) {
+        return .blockedNeedsSupport(reason: "recovery")
+      }
       let ready = family.window.ready
       if !nightCounts.hasReport {
         return .notStreamed
@@ -153,8 +160,12 @@ extension HealthDataStore {
       // extraction_ready:false (hrv_rr_interval_scale_unverified in
       // metric_readiness.rs, not validated against openwhoop_reference.rs). An
       // un-validated decode path NEVER shows calibrating progress and never
-      // reads ready — it stays blocked regardless of night count.
-      if familyHasUnverifiedExtractionBlocker("hrv", in: readiness)
+      // reads ready — it stays blocked regardless of night count. Fail CLOSED:
+      // until the readiness report has loaded and proves otherwise, treat HRV as
+      // blocked (the gate is a hardcoded invariant today, not data-dependent),
+      // so the EWMA night counts can never flash a transient "calibrating".
+      if !readiness.hasReport
+        || familyHasUnverifiedExtractionBlocker("hrv", in: readiness)
         || familyHasUnverifiedExtractionBlocker("stress", in: readiness) {
         return .blockedNeedsSupport(reason: "hrv")
       }

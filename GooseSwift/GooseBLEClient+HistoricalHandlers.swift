@@ -803,7 +803,9 @@ extension GooseBLEClient {
         title: "historical_sync.auto_failed",
         body: "consecutive=\(consecutiveAutomaticSyncFailures) \(message)"
       )
-      if consecutiveAutomaticSyncFailures >= Self.automaticSyncFailureNotifyThreshold {
+      // Fire the local notification exactly once, when the streak first reaches
+      // the threshold — not on every subsequent failure (avoids re-alerting).
+      if consecutiveAutomaticSyncFailures == Self.automaticSyncFailureNotifyThreshold {
         notifyRepeatedAutomaticSyncFailure()
       }
     } else {
