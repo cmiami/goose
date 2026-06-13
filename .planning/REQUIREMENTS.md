@@ -14,23 +14,23 @@
 
 ### HAP — Haptics / Hardware WHOOP 5.0
 
-- [ ] **HAP-01**: App consegue vibrar a pulseira WHOOP 5.0 via BLE cmd 0x13 (buzz(loops:) primitive; pré-requisito para HAP-02/03/04 e FEAT-02)
+- [x] **HAP-01**: App consegue vibrar a pulseira WHOOP 5.0 via BLE cmd 0x13 (buzz(loops:) primitive; pré-requisito para HAP-02/03/04 e FEAT-02)
 - [ ] **HAP-02**: Utilizador consegue usar ecrã Breathe com feedback haptic paceado (AdvancedHaptic/HapticHeartbeat; requer HAP-01)
-- [ ] **HAP-03**: Utilizador consegue agendar alarme de vibração na pulseira a hora fixa (smart alarm — single-shot BLE write; requer HAP-01)
+- [x] **HAP-03**: Utilizador consegue agendar alarme de vibração na pulseira a hora fixa (smart alarm — single-shot BLE write; requer HAP-01)
 - [ ] **HAP-04**: Pulseira vibra no momento óptimo dentro de uma janela de despertar (wake-window engine; RE-gated — requer sessões BTSnoop + Ghidra de SetAlarmInfoCommandPacketRev4)
 
 ### FEAT — Features / Coach / Notificações
 
 - [ ] **FEAT-01**: Coach tab mostra nudges VOW (Voice of WHOOP) contextuais calculados localmente via bridge (sem servidor)
 - [ ] **FEAT-02**: Utilizador consegue aceder a Breathe UI, Interval Timer e Metric Explorer (NoopApp features; Breathe UI requer HAP-01)
-- [ ] **FEAT-03**: App envia notificação local após conclusão de ciclo de sono, detecção de workout e bateria WHOOP abaixo de 20% (usa getNotificationSettings — permissão já concedida em onboarding)
+- [x] **FEAT-03**: App envia notificação local após conclusão de ciclo de sono, detecção de workout e bateria WHOOP abaixo de 20% (usa getNotificationSettings — permissão já concedida em onboarding)
 
 ### DATA — Dados / Ecrãs
 
 - [ ] **DATA-01**: App persiste diário de comportamentos (Y/N diários), log de treino com sport tag, dados Apple Health diários, e séries de métricas genéricas em SQLite (schema v20 — 4 tabelas com migration arm condicional)
 - [ ] **DATA-02**: Ecrã de workout mostra strain acumulado em tempo real durante sessão activa (GooseStrainAccumulator Swift-side; publica via Task @MainActor)
-- [ ] **DATA-03**: Utilizador vê ecrã Stress/ANS com tiles ANS, dashboard Trends histórico e sheet de entrada manual de workout
-- [ ] **DATA-04**: Ecrã de HR carrega sem lag em sessões longas (HR sample decimation via stride/LTTB preservando extremos locais)
+- [x] **DATA-03**: Utilizador vê ecrã Stress/ANS com tiles ANS, dashboard Trends histórico e sheet de entrada manual de workout
+- [x] **DATA-04**: Ecrã de HR carrega sem lag em sessões longas (HR sample decimation via stride/LTTB preservando extremos locais)
 
 ### ARCH — Arquitectura / Testabilidade
 

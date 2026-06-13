@@ -16,6 +16,9 @@ enum MoreRoute: String, CaseIterable, Identifiable, Hashable {
   case support
   case about
   case developer
+  case breathe
+  case intervalTimer
+  case metricExplorer
 
   var id: String { rawValue }
 
@@ -36,6 +39,9 @@ enum MoreRoute: String, CaseIterable, Identifiable, Hashable {
     case .support: String(localized: "Support")
     case .about: String(localized: "About")
     case .developer: String(localized: "Developer")
+    case .breathe: String(localized: "Breathe")
+    case .intervalTimer: String(localized: "Interval Timer")
+    case .metricExplorer: String(localized: "Metric Explorer")
     }
   }
 
@@ -56,6 +62,9 @@ enum MoreRoute: String, CaseIterable, Identifiable, Hashable {
     case .support: String(localized: "Logs, support bundles, and troubleshooting")
     case .about: String(localized: "App, Rust core, and licenses")
     case .developer: String(localized: "Capture, exports, bridge diagnostics, and debug tools")
+    case .breathe: String(localized: "Paced breathing with haptics")
+    case .intervalTimer: String(localized: "Work/rest intervals with haptic transitions")
+    case .metricExplorer: String(localized: "Current metric values from your WHOOP data")
     }
   }
 
@@ -76,6 +85,9 @@ enum MoreRoute: String, CaseIterable, Identifiable, Hashable {
     case .support: "lifepreserver"
     case .about: "info.circle"
     case .developer: "hammer"
+    case .breathe: "wind"
+    case .intervalTimer: "timer"
+    case .metricExplorer: "chart.bar.doc.horizontal"
     }
   }
 
@@ -96,6 +108,9 @@ enum MoreRoute: String, CaseIterable, Identifiable, Hashable {
     case .support: \.support
     case .about: \.about
     case .developer: \.developer
+    case .breathe: \.breathe
+    case .intervalTimer: \.intervalTimer
+    case .metricExplorer: \.metricExplorer
     }
   }
 
@@ -105,6 +120,8 @@ enum MoreRoute: String, CaseIterable, Identifiable, Hashable {
   static let supportRoutes: [MoreRoute] = [.support, .about]
   static let developerRoutes: [MoreRoute] = [.developer]
   static let developerToolRoutes: [MoreRoute] = [.connectionLab, .capture, .localStore, .rawExport, .algorithms, .debug]
+  static let wellnessRoutes: [MoreRoute] = [.breathe, .intervalTimer]
+  static let dataRoutes: [MoreRoute] = [.metricExplorer]
 }
 
 struct MoreRouteStatus: Equatable {
@@ -123,6 +140,9 @@ struct MoreRouteStatus: Equatable {
   var support: MoreStatusKind
   var about: MoreStatusKind
   var developer: MoreStatusKind
+  var breathe: MoreStatusKind
+  var intervalTimer: MoreStatusKind
+  var metricExplorer: MoreStatusKind
 }
 
 enum MoreStatusKind: String, CaseIterable {

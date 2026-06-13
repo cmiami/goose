@@ -195,6 +195,7 @@ pub const BRIDGE_METHODS: &[&str] = &[
     "activity.list_sessions_with_metrics",
     "activity.metrics_for_session_in_window",
     "activity.update_session",
+    "apple_daily.upsert",
     "biometrics.insert_v24_batch",
     "biometrics.spo2_from_raw",
     "biometrics.v24_between",
@@ -240,6 +241,9 @@ pub const BRIDGE_METHODS: &[&str] = &[
     "historical_sync.dry_run",
     "historical_sync.physical_evidence_template",
     "historical_sync.validate_physical_evidence",
+    "journal.upsert",
+    "metric_series.query_range",
+    "metric_series.upsert",
     "metrics.activity_unavailable_daily_status",
     "metrics.built_in_definitions",
     "metrics.daily_activity_metrics",
@@ -263,6 +267,7 @@ pub const BRIDGE_METHODS: &[&str] = &[
     "metrics.hourly_activity_metrics",
     "metrics.hrv_capture_validation",
     "metrics.hrv_features",
+    "metrics.imu_step_count_from_decoded_frames",
     "metrics.imu_step_count_v1",
     "metrics.input_readiness",
     "metrics.motion_features",
@@ -323,6 +328,7 @@ pub const BRIDGE_METHODS: &[&str] = &[
     "ui_coverage.audit",
     "upload.get_raw_frames_for_upload",
     "upload.get_recent_decoded_streams",
+    "workout.upsert",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1538,6 +1544,83 @@ struct ActivitySessionUpsertArgs {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct JournalUpsertArgs {
+    database_path: String,
+    date: String,
+    source: String,
+    behaviors_json: String,
+    #[serde(default)]
+    notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WorkoutUpsertArgs {
+    database_path: String,
+    date: String,
+    source: String,
+    sport: String,
+    start_time: String,
+    end_time: String,
+    duration_s: f64,
+    #[serde(default)]
+    activity_session_id: Option<String>,
+    #[serde(default)]
+    avg_hr_bpm: Option<f64>,
+    #[serde(default)]
+    max_hr_bpm: Option<f64>,
+    #[serde(default)]
+    strain: Option<f64>,
+    #[serde(default)]
+    calories_kcal: Option<f64>,
+    #[serde(default)]
+    distance_m: Option<f64>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default = "empty_json_object")]
+    provenance: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AppleDailyUpsertArgs {
+    database_path: String,
+    date: String,
+    source: String,
+    #[serde(default)]
+    steps: Option<i64>,
+    #[serde(default)]
+    active_kcal: Option<f64>,
+    #[serde(default)]
+    basal_kcal: Option<f64>,
+    #[serde(default)]
+    avg_hr_bpm: Option<f64>,
+    #[serde(default)]
+    max_hr_bpm: Option<f64>,
+    #[serde(default)]
+    vo2max: Option<f64>,
+    #[serde(default)]
+    weight_kg: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MetricSeriesUpsertArgs {
+    database_path: String,
+    source: String,
+    metric_name: String,
+    date: String,
+    value: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MetricSeriesQueryRangeArgs {
+    database_path: String,
+    metric_name: String,
+    start_date: String,
+    end_date: String,
+    #[serde(default)]
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct ActivitySessionLookupArgs {
     database_path: String,
     session_id: String,
@@ -2226,6 +2309,12 @@ fn handle_bridge_request_inner(request: BridgeRequest) -> BridgeResponse {
             })
             .map(|value| bridge_ok(&request.request_id, value))
             .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
+        "metrics.imu_step_count_from_decoded_frames" => {
+            request_args::<ImuStepCountFromDecodedFramesArgs>(&request)
+                .and_then(imu_step_count_from_decoded_frames_bridge)
+                .map(|value| bridge_ok(&request.request_id, value))
+                .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error))
+        }
         "metrics.imu_step_count_v1" => request_args::<ImuStepCountInput>(&request)
             .and_then(|input| {
                 serde_json::to_value(imu_step_count_v1(&input)).map_err(|e| {
@@ -2533,6 +2622,26 @@ fn handle_bridge_request_inner(request: BridgeRequest) -> BridgeResponse {
             .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
         "capture.list_sessions" => request_args::<CaptureListSessionsArgs>(&request)
             .and_then(capture_list_sessions_bridge)
+            .map(|value| bridge_ok(&request.request_id, value))
+            .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
+        "journal.upsert" => request_args::<JournalUpsertArgs>(&request)
+            .and_then(journal_upsert_bridge)
+            .map(|value| bridge_ok(&request.request_id, value))
+            .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
+        "workout.upsert" => request_args::<WorkoutUpsertArgs>(&request)
+            .and_then(workout_upsert_bridge)
+            .map(|value| bridge_ok(&request.request_id, value))
+            .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
+        "apple_daily.upsert" => request_args::<AppleDailyUpsertArgs>(&request)
+            .and_then(apple_daily_upsert_bridge)
+            .map(|value| bridge_ok(&request.request_id, value))
+            .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
+        "metric_series.query_range" => request_args::<MetricSeriesQueryRangeArgs>(&request)
+            .and_then(metric_series_query_range_bridge)
+            .map(|value| bridge_ok(&request.request_id, value))
+            .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
+        "metric_series.upsert" => request_args::<MetricSeriesUpsertArgs>(&request)
+            .and_then(metric_series_upsert_bridge)
             .map(|value| bridge_ok(&request.request_id, value))
             .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
         "activity.create_session" => request_args::<ActivitySessionUpsertArgs>(&request)
@@ -3216,6 +3325,74 @@ const IMU_LSB_PER_G: f64 = 3900.0;
 // in the Swift layer. No Rust toggle is needed — this pipeline only stores
 // and converts the resulting K10/K21 motion data. (IMU-04 — no code change
 // required beyond this documentation comment.)
+
+#[derive(Debug, Deserialize)]
+struct ImuStepCountFromDecodedFramesArgs {
+    database_path: String,
+    start_ts: f64,
+    end_ts: f64,
+}
+
+/// Read K10 accelerometer data from decoded_frames between start_ts and end_ts,
+/// convert LSB→g via IMU_LSB_PER_G, and feed the samples to imu_step_count_v1.
+/// Bypasses the gravity table entirely — works for all users regardless of
+/// whether server upload is configured.
+fn imu_step_count_from_decoded_frames_bridge(
+    args: ImuStepCountFromDecodedFramesArgs,
+) -> GooseResult<serde_json::Value> {
+    let store = open_bridge_store(&args.database_path)?;
+
+    let start_dt = chrono_from_unix(args.start_ts);
+    let end_dt = chrono_from_unix(args.end_ts);
+
+    let frames = store.decoded_frames_between(&start_dt, &end_dt)?;
+
+    let mut gravity_samples: Vec<[f64; 3]> = Vec::new();
+
+    for frame in &frames {
+        if !frame.header_crc_valid || !frame.payload_crc_valid {
+            continue;
+        }
+
+        let parsed: Option<ParsedPayload> =
+            serde_json::from_str(&frame.parsed_payload_json).unwrap_or(None);
+
+        if let Some(ParsedPayload::DataPacket {
+            body_summary: Some(DataPacketBodySummary::RawMotionK10 { axes, .. }),
+            ..
+        }) = parsed
+        {
+            let ax = axes
+                .iter()
+                .find(|a| a.name == "accelerometer_x")
+                .and_then(|a| a.full_samples.as_ref());
+            let ay = axes
+                .iter()
+                .find(|a| a.name == "accelerometer_y")
+                .and_then(|a| a.full_samples.as_ref());
+            let az = axes
+                .iter()
+                .find(|a| a.name == "accelerometer_z")
+                .and_then(|a| a.full_samples.as_ref());
+
+            if let (Some(xs), Some(ys), Some(zs)) = (ax, ay, az) {
+                let n = xs.len().min(ys.len()).min(zs.len());
+                for i in 0..n {
+                    gravity_samples.push([
+                        xs[i] as f64 / IMU_LSB_PER_G,
+                        ys[i] as f64 / IMU_LSB_PER_G,
+                        zs[i] as f64 / IMU_LSB_PER_G,
+                    ]);
+                }
+            }
+        }
+    }
+
+    let input = ImuStepCountInput { gravity_samples };
+    let output = imu_step_count_v1(&input);
+    serde_json::to_value(output)
+        .map_err(|e| GooseError::message(format!("cannot serialize imu_step_count output: {e}")))
+}
 
 #[derive(Debug, Deserialize)]
 struct UploadGetRecentDecodedStreamsArgs {
@@ -7141,6 +7318,108 @@ fn capture_list_sessions_bridge(args: CaptureListSessionsArgs) -> GooseResult<se
     .map_err(|error| GooseError::message(format!("cannot serialize capture session list: {error}")))
 }
 
+fn journal_upsert_bridge(args: JournalUpsertArgs) -> GooseResult<serde_json::Value> {
+    let store = open_bridge_store(&args.database_path)?;
+    let inserted = store.insert_journal(
+        &args.date,
+        &args.source,
+        &args.behaviors_json,
+        args.notes.as_deref(),
+    )?;
+    Ok(json!({
+        "schema": "goose.journal-upsert-result.v1",
+        "generated_by": "goose-bridge",
+        "inserted": inserted,
+    }))
+}
+
+fn workout_upsert_bridge(args: WorkoutUpsertArgs) -> GooseResult<serde_json::Value> {
+    let provenance_json = json_object_string("provenance", &args.provenance)?;
+    let store = open_bridge_store(&args.database_path)?;
+    let inserted = store.insert_workout(
+        &args.date,
+        &args.source,
+        &args.sport,
+        &args.start_time,
+        &args.end_time,
+        args.duration_s,
+        args.activity_session_id.as_deref(),
+        args.avg_hr_bpm,
+        args.max_hr_bpm,
+        args.strain,
+        args.calories_kcal,
+        args.distance_m,
+        args.notes.as_deref(),
+        &provenance_json,
+    )?;
+    Ok(json!({
+        "schema": "goose.workout-upsert-result.v1",
+        "generated_by": "goose-bridge",
+        "inserted": inserted,
+    }))
+}
+
+fn apple_daily_upsert_bridge(args: AppleDailyUpsertArgs) -> GooseResult<serde_json::Value> {
+    let store = open_bridge_store(&args.database_path)?;
+    let inserted = store.insert_apple_daily(
+        &args.date,
+        &args.source,
+        args.steps,
+        args.active_kcal,
+        args.basal_kcal,
+        args.avg_hr_bpm,
+        args.max_hr_bpm,
+        args.vo2max,
+        args.weight_kg,
+    )?;
+    Ok(json!({
+        "schema": "goose.apple-daily-upsert-result.v1",
+        "generated_by": "goose-bridge",
+        "inserted": inserted,
+    }))
+}
+
+fn metric_series_upsert_bridge(args: MetricSeriesUpsertArgs) -> GooseResult<serde_json::Value> {
+    // T-69-01: validate metric_name is non-empty and matches [a-z0-9._-]+
+    if args.metric_name.is_empty()
+        || !args.metric_name.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-'
+        })
+    {
+        return Err(GooseError::message(format!(
+            "invalid metric_name '{}': must be non-empty and match [a-z0-9._-]+",
+            args.metric_name
+        )));
+    }
+    let store = open_bridge_store(&args.database_path)?;
+    let inserted =
+        store.insert_metric_series(&args.source, &args.metric_name, &args.date, args.value)?;
+    Ok(json!({
+        "schema": "goose.metric-series-upsert-result.v1",
+        "generated_by": "goose-bridge",
+        "inserted": inserted,
+    }))
+}
+
+fn metric_series_query_range_bridge(
+    args: MetricSeriesQueryRangeArgs,
+) -> GooseResult<serde_json::Value> {
+    let store = open_bridge_store(&args.database_path)?;
+    let rows = store.query_metric_series_range(
+        &args.metric_name,
+        &args.start_date,
+        &args.end_date,
+        args.source.as_deref(),
+    )?;
+    Ok(json!({
+        "schema": "goose.metric-series-query-range-result.v1",
+        "metric_name": args.metric_name,
+        "start_date": args.start_date,
+        "end_date": args.end_date,
+        "rows": rows,
+    }))
+}
+
 fn activity_create_session_bridge(
     args: ActivitySessionUpsertArgs,
 ) -> GooseResult<serde_json::Value> {
@@ -10375,6 +10654,145 @@ mod tests {
         assert!(
             result["sleep_efficiency_fraction"].is_number(),
             "sleep_efficiency_fraction must be present in the output"
+        );
+    }
+
+    // ---- metric_series.query_range round-trip test -------------------------
+
+    #[test]
+    fn metric_series_query_range_round_trip() {
+        let (_dir, db_path) = make_temp_db();
+
+        // Seed a row via metric_series.upsert
+        let upsert_req = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "test-ms-upsert".to_string(),
+            method: "metric_series.upsert".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "source": "test",
+                "metric_name": "recovery",
+                "date": "2026-06-01",
+                "value": 72.5_f64,
+            }),
+        };
+        let upsert_resp = handle_bridge_request(upsert_req);
+        assert!(
+            upsert_resp.ok,
+            "metric_series.upsert should succeed: {:?}",
+            upsert_resp.error
+        );
+
+        // Query via metric_series.query_range
+        let query_req = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "test-ms-query".to_string(),
+            method: "metric_series.query_range".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "metric_name": "recovery",
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-07",
+            }),
+        };
+        let query_resp = handle_bridge_request(query_req);
+        assert!(
+            query_resp.ok,
+            "metric_series.query_range should succeed: {:?}",
+            query_resp.error
+        );
+        let result = query_resp.result.expect("result must be present");
+        let rows = result["rows"].as_array().expect("rows must be an array");
+        assert_eq!(
+            rows.len(),
+            1,
+            "one row must be returned for the seeded date"
+        );
+        assert_eq!(
+            rows[0]["date"].as_str(),
+            Some("2026-06-01"),
+            "row date must match"
+        );
+        let value = rows[0]["value"].as_f64().expect("value must be f64");
+        assert!(
+            (value - 72.5).abs() < 0.001,
+            "row value must match seeded 72.5, got {value}"
+        );
+    }
+
+    #[test]
+    fn metric_series_query_range_empty_when_no_rows() {
+        let (_dir, db_path) = make_temp_db();
+
+        let query_req = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "test-ms-query-empty".to_string(),
+            method: "metric_series.query_range".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "metric_name": "recovery",
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-07",
+            }),
+        };
+        let query_resp = handle_bridge_request(query_req);
+        assert!(
+            query_resp.ok,
+            "query_range on empty table should succeed: {:?}",
+            query_resp.error
+        );
+        let result = query_resp.result.expect("result must be present");
+        let rows = result["rows"].as_array().expect("rows must be an array");
+        assert!(rows.is_empty(), "rows must be empty when no data exists");
+    }
+
+    #[test]
+    fn metric_series_query_range_filters_by_source() {
+        let (_dir, db_path) = make_temp_db();
+
+        // Insert two rows with different sources
+        for (source, value) in [("whoop", 80.0_f64), ("manual", 60.0_f64)] {
+            let upsert_req = BridgeRequest {
+                schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+                request_id: format!("test-ms-upsert-{source}"),
+                method: "metric_series.upsert".to_string(),
+                args: json!({
+                    "database_path": db_path,
+                    "source": source,
+                    "metric_name": "hrv",
+                    "date": "2026-06-01",
+                    "value": value,
+                }),
+            };
+            let resp = handle_bridge_request(upsert_req);
+            assert!(resp.ok, "upsert for source={source} should succeed");
+        }
+
+        // Query with source filter — should return only whoop row
+        let query_req = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "test-ms-query-filtered".to_string(),
+            method: "metric_series.query_range".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "metric_name": "hrv",
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-07",
+                "source": "whoop",
+            }),
+        };
+        let query_resp = handle_bridge_request(query_req);
+        assert!(
+            query_resp.ok,
+            "query_range with source filter should succeed"
+        );
+        let result = query_resp.result.expect("result must be present");
+        let rows = result["rows"].as_array().expect("rows must be an array");
+        assert_eq!(rows.len(), 1, "source filter must return only matching row");
+        let value = rows[0]["value"].as_f64().expect("value must be f64");
+        assert!(
+            (value - 80.0).abs() < 0.001,
+            "filtered row must be the whoop value (80.0), got {value}"
         );
     }
 }

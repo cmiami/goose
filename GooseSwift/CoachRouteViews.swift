@@ -81,6 +81,8 @@ private struct CoachRouteRow: View {
 
 struct CoachSleepRouteView: View {
   var healthStore: HealthDataStore
+  @Environment(GooseAppModel.self) private var model
+  @State private var alarmTime: Date = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
 
   private var sleep: PrimarySleepDetail? { healthStore.primarySleepDetail }
 
@@ -117,6 +119,8 @@ struct CoachSleepRouteView: View {
             CoachInfoRow(label: String(localized: "Debt"), value: sleepDebt(actual: sleep.durationText))
           }
         }
+
+        wakeAlarmSection
       }
       .padding(16)
     }
@@ -129,6 +133,7 @@ struct CoachSleepRouteView: View {
     guard let start = sleep?.startLabel else { return "—" }
     // Parse HH:mm and subtract 30 min
     let fmt = DateFormatter()
+    fmt.locale = Locale(identifier: "en_US_POSIX")
     fmt.dateFormat = "HH:mm"
     guard let date = fmt.date(from: start) else { return String(localized: "30 min before \(start)") }
     let adjusted = date.addingTimeInterval(-30 * 60)
@@ -152,6 +157,62 @@ struct CoachSleepRouteView: View {
     }
     guard hours != nil || mins != nil else { return nil }
     return (hours ?? 0) * 60 + (mins ?? 0)
+  }
+
+  private var isDisconnected: Bool { model.ble.connectionState != "ready" }
+
+  @ViewBuilder
+  private var wakeAlarmSection: some View {
+    CoachInfoGroup(title: "ALARME DE DESPERTAR") {
+      VStack(spacing: 12) {
+        DatePicker(
+          "Hora de acordar",
+          selection: $alarmTime,
+          displayedComponents: .hourAndMinute
+        )
+        .labelsHidden()
+        .disabled(isDisconnected || model.alarmIsArmed)
+        .opacity(isDisconnected || model.alarmIsArmed ? 0.4 : 1)
+        .accessibilityHint(isDisconnected ? "Conecta o WHOOP para ativar" : "")
+
+        if isDisconnected && !model.alarmIsArmed {
+          HStack(spacing: 8) {
+            Image(systemName: "sensor.tag.radiowaves.forward")
+              .foregroundStyle(.secondary)
+            Text("Conecta o WHOOP para usar o alarme")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          .accessibilityElement(children: .combine)
+        }
+
+        Button {
+          if model.alarmIsArmed {
+            model.ble.disableWhoopAlarms()
+            model.alarmIsArmed = false
+            model.scheduledAlarmTime = nil
+          } else {
+            guard model.ble.connectionState == "ready",
+                  model.ble.pendingAlarmCommand == nil else { return }
+            model.ble.setWhoopAlarm(at: alarmTime)
+            model.ble.buzz(loops: 2)
+            model.alarmIsArmed = true
+            model.scheduledAlarmTime = alarmTime
+          }
+        } label: {
+          Text(model.alarmIsArmed ? "Cancelar Alarme" : "Armar Alarme")
+            .font(.body.weight(.semibold))
+            .foregroundStyle(model.alarmIsArmed ? Color.red : Color.indigo)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(
+              (model.alarmIsArmed ? Color.red : Color.indigo).opacity(0.14),
+              in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+        }
+        .disabled(isDisconnected)
+        .accessibilityLabel(model.alarmIsArmed ? "Cancelar alarme armado" : "Armar alarme de despertar")
+      }
+    }
   }
 }
 

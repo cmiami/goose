@@ -166,6 +166,8 @@
 		D1000000000000000000005D /* GooseAppModel+SleepSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000000000000000000005D /* GooseAppModel+SleepSync.swift */; };
 		D1000000000000000000005E /* GooseAppModel+BandFirstSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000000000000000000005E /* GooseAppModel+BandFirstSync.swift */; };
 		D1000000000000000000005F /* GooseStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2000000000000000000005F /* GooseStateMachine.swift */; };
+		D100000000000000000000060 /* BreatheView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D200000000000000000000060 /* BreatheView.swift */; };
+		D100000000000000000000061 /* GooseBLEClient+Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D200000000000000000000061 /* GooseBLEClient+Haptics.swift */; };
 		E1000000000000000000001 /* CoachProviderProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000000000000000000001 /* CoachProviderProtocol.swift */; };
 		E1000000000000000000002 /* CoachChatModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000000000000000000002 /* CoachChatModel.swift */; };
 		E1000000000000000000003 /* ChatGPTCoachProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000000000000000000003 /* ChatGPTCoachProvider.swift */; };
@@ -177,10 +179,20 @@
 		E1000000000000000000009 /* GooseBLEBondingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000000000000000000009 /* GooseBLEBondingManager.swift */; };
 		E100000000000000000000E /* GooseBLEHistoricalManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000000000000E /* GooseBLEHistoricalManager.swift */; };
 		E100000000000000000000F /* GooseBLEDataValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000000000000F /* GooseBLEDataValidator.swift */; };
+		E1000000000000000000010 /* GooseStrainAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000000000000000000010 /* GooseStrainAccumulator.swift */; };
+		E1000000000000000000014 /* GooseWakeWindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000000000000000000014 /* GooseWakeWindowManager.swift */; };
+		E1000000000000000000011 /* NotificationScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000000000000000000011 /* NotificationScheduler.swift */; };
+		E1000000000000000000012 /* IntervalTimerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000000000000000000012 /* IntervalTimerView.swift */; };
+		E1000000000000000000013 /* MetricExplorerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2000000000000000000013 /* MetricExplorerView.swift */; };
 		E100000000000000000000A /* GooseUploadWatermark.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000000000000A /* GooseUploadWatermark.swift */; };
 		E100000000000000000000B /* GooseNetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000000000000B /* GooseNetworkMonitor.swift */; };
 		E100000000000000000000C /* GooseAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000000000000C /* GooseAppDelegate.swift */; };
 		E100000000000000000000D /* GooseHRSanitizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000000000000D /* GooseHRSanitizer.swift */; };
+		E10000000000000000000010 /* TrendsDashboardViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000010 /* TrendsDashboardViews.swift */; };
+		E10000000000000000000011 /* ManualWorkoutEntryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000011 /* ManualWorkoutEntryViews.swift */; };
+		E10000000000000000000012 /* GooseRustBridging.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000012 /* GooseRustBridging.swift */; };
+		E10000000000000000000013 /* GooseBLEManaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000013 /* GooseBLEManaging.swift */; };
+		E10000000000000000000014 /* HealthDataStoring.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000014 /* HealthDataStoring.swift */; };
 		T10000000000000000000001 /* WearableDescriptorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000002 /* WearableDescriptorTests.swift */; };
 		T10000000000000000000002 /* GooseBLETypesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000003 /* GooseBLETypesTests.swift */; };
 		T10000000000000000000003 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = T20000000000000000000005 /* XCTest.framework */; };
@@ -192,11 +204,16 @@
 		T10000000000000000000009 /* ClaudeProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000B /* ClaudeProviderTests.swift */; };
 		T1000000000000000000000A /* CustomEndpointProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000C /* CustomEndpointProviderTests.swift */; };
 		T1000000000000000000000B /* GeminiProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000D /* GeminiProviderTests.swift */; };
-		T1000000000000000000000C /* TemperatureFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000E /* TemperatureFormattingTests.swift */; };
-		T1000000000000000000000D /* BaselineProgressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000F /* BaselineProgressTests.swift */; };
-		T1000000000000000000000E /* HistoricalRangeParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000010 /* HistoricalRangeParsingTests.swift */; };
-		T1000000000000000000000F /* WorkoutLiveActivityAttributesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000011 /* WorkoutLiveActivityAttributesTests.swift */; };
-	/* End PBXBuildFile section */
+		T1000000000000000000000C /* MockBLEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000E /* MockBLEClient.swift */; };
+		T1000000000000000000000D /* MockHealthStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000F /* MockHealthStore.swift */; };
+		T1000000000000000000000E /* MockRustBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000010 /* MockRustBridge.swift */; };
+		T1000000000000000000000F /* TrendsFetchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000011 /* TrendsFetchTests.swift */; };
+		T10000000000000000000010 /* WorkoutEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000012 /* WorkoutEntryTests.swift */; };
+		T10000000000000000000011 /* TemperatureFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000013 /* TemperatureFormattingTests.swift */; };
+		T10000000000000000000012 /* BaselineProgressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000014 /* BaselineProgressTests.swift */; };
+		T10000000000000000000013 /* HistoricalRangeParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000015 /* HistoricalRangeParsingTests.swift */; };
+		T10000000000000000000014 /* WorkoutLiveActivityAttributesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000016 /* WorkoutLiveActivityAttributesTests.swift */; };
+/* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		B70000000000000000000001 /* PBXContainerItemProxy */ = {
@@ -389,6 +406,8 @@
 		D20000000000000000000058 /* GooseBLEClient+HRMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GooseBLEClient+HRMonitor.swift"; sourceTree = "<group>"; };
 		D20000000000000000000059 /* GooseBLEReconnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseBLEReconnect.swift; sourceTree = "<group>"; };
 		D2000000000000000000005F /* GooseStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseStateMachine.swift; sourceTree = "<group>"; };
+		D200000000000000000000060 /* BreatheView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreatheView.swift; sourceTree = "<group>"; };
+		D200000000000000000000061 /* GooseBLEClient+Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GooseBLEClient+Haptics.swift"; sourceTree = "<group>"; };
 		D2000000000000000000005A /* HRMonitorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HRMonitorView.swift; sourceTree = "<group>"; };
 		D2000000000000000000005B /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		D2000000000000000000005C /* LocalizedStatusStrings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizedStatusStrings.swift; sourceTree = "<group>"; };
@@ -405,10 +424,20 @@
 		E2000000000000000000009 /* GooseBLEBondingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseBLEBondingManager.swift; sourceTree = "<group>"; };
 		E200000000000000000000E /* GooseBLEHistoricalManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseBLEHistoricalManager.swift; sourceTree = "<group>"; };
 		E200000000000000000000F /* GooseBLEDataValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseBLEDataValidator.swift; sourceTree = "<group>"; };
+		E2000000000000000000010 /* GooseStrainAccumulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseStrainAccumulator.swift; sourceTree = "<group>"; };
+		E2000000000000000000014 /* GooseWakeWindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseWakeWindowManager.swift; sourceTree = "<group>"; };
+		E2000000000000000000011 /* NotificationScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationScheduler.swift; sourceTree = "<group>"; };
+		E2000000000000000000012 /* IntervalTimerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntervalTimerView.swift; sourceTree = "<group>"; };
+		E2000000000000000000013 /* MetricExplorerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricExplorerView.swift; sourceTree = "<group>"; };
 		E200000000000000000000A /* GooseUploadWatermark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseUploadWatermark.swift; sourceTree = "<group>"; };
 		E200000000000000000000B /* GooseNetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseNetworkMonitor.swift; sourceTree = "<group>"; };
 		E200000000000000000000C /* GooseAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseAppDelegate.swift; sourceTree = "<group>"; };
 		E200000000000000000000D /* GooseHRSanitizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseHRSanitizer.swift; sourceTree = "<group>"; };
+		E20000000000000000000010 /* TrendsDashboardViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrendsDashboardViews.swift; sourceTree = "<group>"; };
+		E20000000000000000000011 /* ManualWorkoutEntryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualWorkoutEntryViews.swift; sourceTree = "<group>"; };
+		E20000000000000000000012 /* GooseRustBridging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseRustBridging.swift; sourceTree = "<group>"; };
+		E20000000000000000000013 /* GooseBLEManaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GooseBLEManaging.swift; sourceTree = "<group>"; };
+		E20000000000000000000014 /* HealthDataStoring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthDataStoring.swift; sourceTree = "<group>"; };
 		F20000000000000000000001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		F20000000000000000000002 /* Local.xcconfig.template */ = {isa = PBXFileReference; lastKnownFileType = text; path = Local.xcconfig.template; sourceTree = "<group>"; };
 		F20000000000000000000003 /* SigningExtension.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = SigningExtension.xcconfig; sourceTree = "<group>"; };
@@ -425,10 +454,15 @@
 		T2000000000000000000000B /* ClaudeProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeProviderTests.swift; sourceTree = "<group>"; };
 		T2000000000000000000000C /* CustomEndpointProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomEndpointProviderTests.swift; sourceTree = "<group>"; };
 		T2000000000000000000000D /* GeminiProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiProviderTests.swift; sourceTree = "<group>"; };
-		T2000000000000000000000E /* TemperatureFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureFormattingTests.swift; sourceTree = "<group>"; };
-		T2000000000000000000000F /* BaselineProgressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaselineProgressTests.swift; sourceTree = "<group>"; };
-		T20000000000000000000010 /* HistoricalRangeParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoricalRangeParsingTests.swift; sourceTree = "<group>"; };
-		T20000000000000000000011 /* WorkoutLiveActivityAttributesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutLiveActivityAttributesTests.swift; sourceTree = "<group>"; };
+		T2000000000000000000000E /* MockBLEClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockBLEClient.swift; sourceTree = "<group>"; };
+		T2000000000000000000000F /* MockHealthStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockHealthStore.swift; sourceTree = "<group>"; };
+		T20000000000000000000010 /* MockRustBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockRustBridge.swift; sourceTree = "<group>"; };
+		T20000000000000000000011 /* TrendsFetchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrendsFetchTests.swift; sourceTree = "<group>"; };
+		T20000000000000000000012 /* WorkoutEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutEntryTests.swift; sourceTree = "<group>"; };
+		T20000000000000000000013 /* TemperatureFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureFormattingTests.swift; sourceTree = "<group>"; };
+		T20000000000000000000014 /* BaselineProgressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaselineProgressTests.swift; sourceTree = "<group>"; };
+		T20000000000000000000015 /* HistoricalRangeParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoricalRangeParsingTests.swift; sourceTree = "<group>"; };
+		T20000000000000000000016 /* WorkoutLiveActivityAttributesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutLiveActivityAttributesTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -631,6 +665,8 @@
 				D20000000000000000000058 /* GooseBLEClient+HRMonitor.swift */,
 				D20000000000000000000059 /* GooseBLEReconnect.swift */,
 				D2000000000000000000005F /* GooseStateMachine.swift */,
+				D200000000000000000000060 /* BreatheView.swift */,
+				D200000000000000000000061 /* GooseBLEClient+Haptics.swift */,
 				D2000000000000000000005A /* HRMonitorView.swift */,
 				D2000000000000000000005C /* LocalizedStatusStrings.swift */,
 				E2000000000000000000001 /* CoachProviderProtocol.swift */,
@@ -644,10 +680,20 @@
 				E2000000000000000000009 /* GooseBLEBondingManager.swift */,
 				E200000000000000000000E /* GooseBLEHistoricalManager.swift */,
 				E200000000000000000000F /* GooseBLEDataValidator.swift */,
+				E2000000000000000000010 /* GooseStrainAccumulator.swift */,
+				E2000000000000000000014 /* GooseWakeWindowManager.swift */,
+				E2000000000000000000011 /* NotificationScheduler.swift */,
+				E2000000000000000000012 /* IntervalTimerView.swift */,
+				E2000000000000000000013 /* MetricExplorerView.swift */,
 				E200000000000000000000A /* GooseUploadWatermark.swift */,
 				E200000000000000000000B /* GooseNetworkMonitor.swift */,
 				E200000000000000000000C /* GooseAppDelegate.swift */,
 				E200000000000000000000D /* GooseHRSanitizer.swift */,
+				E20000000000000000000010 /* TrendsDashboardViews.swift */,
+				E20000000000000000000011 /* ManualWorkoutEntryViews.swift */,
+				E20000000000000000000012 /* GooseRustBridging.swift */,
+				E20000000000000000000013 /* GooseBLEManaging.swift */,
+				E20000000000000000000014 /* HealthDataStoring.swift */,
 				D20000000000000000000037 /* GooseBLEClient+Parsing.swift */,
 				D20000000000000000000038 /* GooseBLEClient+CentralDelegate.swift */,
 				D20000000000000000000039 /* GooseBLEClient+PeripheralDelegate.swift */,
@@ -721,10 +767,15 @@
 				T2000000000000000000000B /* ClaudeProviderTests.swift */,
 				T2000000000000000000000C /* CustomEndpointProviderTests.swift */,
 				T2000000000000000000000D /* GeminiProviderTests.swift */,
-				T2000000000000000000000E /* TemperatureFormattingTests.swift */,
-				T2000000000000000000000F /* BaselineProgressTests.swift */,
-				T20000000000000000000010 /* HistoricalRangeParsingTests.swift */,
-				T20000000000000000000011 /* WorkoutLiveActivityAttributesTests.swift */,
+				T2000000000000000000000E /* MockBLEClient.swift */,
+				T2000000000000000000000F /* MockHealthStore.swift */,
+				T20000000000000000000010 /* MockRustBridge.swift */,
+				T20000000000000000000011 /* TrendsFetchTests.swift */,
+				T20000000000000000000012 /* WorkoutEntryTests.swift */,
+				T20000000000000000000013 /* TemperatureFormattingTests.swift */,
+				T20000000000000000000014 /* BaselineProgressTests.swift */,
+				T20000000000000000000015 /* HistoricalRangeParsingTests.swift */,
+				T20000000000000000000016 /* WorkoutLiveActivityAttributesTests.swift */,
 				T20000000000000000000004 /* Info.plist */,
 				);
 			path = GooseSwiftTests;
@@ -1015,10 +1066,20 @@
 				E1000000000000000000009 /* GooseBLEBondingManager.swift in Sources */,
 				E100000000000000000000E /* GooseBLEHistoricalManager.swift in Sources */,
 				E100000000000000000000F /* GooseBLEDataValidator.swift in Sources */,
+				E1000000000000000000010 /* GooseStrainAccumulator.swift in Sources */,
+				E1000000000000000000014 /* GooseWakeWindowManager.swift in Sources */,
+				E1000000000000000000011 /* NotificationScheduler.swift in Sources */,
+				E1000000000000000000012 /* IntervalTimerView.swift in Sources */,
+				E1000000000000000000013 /* MetricExplorerView.swift in Sources */,
 				E100000000000000000000A /* GooseUploadWatermark.swift in Sources */,
 				E100000000000000000000B /* GooseNetworkMonitor.swift in Sources */,
 				E100000000000000000000C /* GooseAppDelegate.swift in Sources */,
 				E100000000000000000000D /* GooseHRSanitizer.swift in Sources */,
+				E10000000000000000000010 /* TrendsDashboardViews.swift in Sources */,
+				E10000000000000000000011 /* ManualWorkoutEntryViews.swift in Sources */,
+				E10000000000000000000012 /* GooseRustBridging.swift in Sources */,
+				E10000000000000000000013 /* GooseBLEManaging.swift in Sources */,
+				E10000000000000000000014 /* HealthDataStoring.swift in Sources */,
 				A1000000000000000000002D /* OpenAICoachResponsesClient.swift in Sources */,
 				A10000000000000000000040 /* CoachLocalToolContext.swift in Sources */,
 				A10000000000000000000027 /* CoachTips.swift in Sources */,
@@ -1038,6 +1099,8 @@
 				D10000000000000000000058 /* GooseBLEClient+HRMonitor.swift in Sources */,
 				D10000000000000000000059 /* GooseBLEReconnect.swift in Sources */,
 				D1000000000000000000005F /* GooseStateMachine.swift in Sources */,
+				D100000000000000000000060 /* BreatheView.swift in Sources */,
+				D100000000000000000000061 /* GooseBLEClient+Haptics.swift in Sources */,
 				D1000000000000000000005A /* HRMonitorView.swift in Sources */,
 				D1000000000000000000005C /* LocalizedStatusStrings.swift in Sources */,
 				D1000000000000000000005D /* GooseAppModel+SleepSync.swift in Sources */,
@@ -1070,10 +1133,15 @@
 				T10000000000000000000009 /* ClaudeProviderTests.swift in Sources */,
 				T1000000000000000000000A /* CustomEndpointProviderTests.swift in Sources */,
 				T1000000000000000000000B /* GeminiProviderTests.swift in Sources */,
-				T1000000000000000000000C /* TemperatureFormattingTests.swift in Sources */,
-				T1000000000000000000000D /* BaselineProgressTests.swift in Sources */,
-				T1000000000000000000000E /* HistoricalRangeParsingTests.swift in Sources */,
-				T1000000000000000000000F /* WorkoutLiveActivityAttributesTests.swift in Sources */,
+				T1000000000000000000000C /* MockBLEClient.swift in Sources */,
+				T1000000000000000000000D /* MockHealthStore.swift in Sources */,
+				T1000000000000000000000E /* MockRustBridge.swift in Sources */,
+				T1000000000000000000000F /* TrendsFetchTests.swift in Sources */,
+				T10000000000000000000010 /* WorkoutEntryTests.swift in Sources */,
+				T10000000000000000000011 /* TemperatureFormattingTests.swift in Sources */,
+				T10000000000000000000012 /* BaselineProgressTests.swift in Sources */,
+				T10000000000000000000013 /* HistoricalRangeParsingTests.swift in Sources */,
+				T10000000000000000000014 /* WorkoutLiveActivityAttributesTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

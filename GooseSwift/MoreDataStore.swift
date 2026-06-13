@@ -24,7 +24,10 @@ final class MoreDataStore: ObservableObject {
     remoteServer: .pending,
     support: .pending,
     about: .ready,
-    developer: .pending
+    developer: .pending,
+    breathe: .ready,
+    intervalTimer: .ready,
+    metricExplorer: .ready
   )
 
   @Published var databasePath: String
@@ -160,7 +163,10 @@ final class MoreDataStore: ObservableObject {
       remoteServer: (UserDefaults.standard.string(forKey: RemoteServerStorage.serverURL)?.isEmpty ?? true) ? .pending : .ready,
       support: .pending,
       about: .ready,
-      developer: .pending
+      developer: .pending,
+      breathe: .ready,
+      intervalTimer: .ready,
+      metricExplorer: .ready
     )
     routeStatus = newStatus
   }

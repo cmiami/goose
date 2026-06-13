@@ -11,7 +11,7 @@ use crate::{
     validation_labels::OFFICIAL_WHOOP_LABEL_POLICY,
 };
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 19;
+pub const CURRENT_SCHEMA_VERSION: i64 = 20;
 pub const DEFAULT_RAW_EVIDENCE_PAYLOAD_RETENTION_LIMIT_BYTES: i64 = 512 * 1024 * 1024;
 
 const ALLOWED_METRIC_SOURCE_KINDS: [&str; 4] = [
@@ -1742,6 +1742,65 @@ impl GooseStore {
                 PRIMARY KEY (namespace, stream)
             );
 
+            CREATE TABLE IF NOT EXISTS journal (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                date           TEXT NOT NULL,
+                source         TEXT NOT NULL DEFAULT 'goose',
+                behaviors_json TEXT NOT NULL DEFAULT '{}',
+                notes          TEXT,
+                created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                UNIQUE(source, date)
+            );
+
+            CREATE TABLE IF NOT EXISTS workout (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                activity_session_id TEXT REFERENCES activity_sessions(session_id) ON DELETE SET NULL,
+                date                TEXT NOT NULL,
+                source              TEXT NOT NULL,
+                sport               TEXT NOT NULL,
+                start_time          TEXT NOT NULL,
+                end_time            TEXT NOT NULL,
+                duration_s          REAL NOT NULL,
+                avg_hr_bpm          REAL,
+                max_hr_bpm          REAL,
+                strain              REAL,
+                calories_kcal       REAL,
+                distance_m          REAL,
+                notes               TEXT,
+                provenance_json     TEXT NOT NULL DEFAULT '{}',
+                created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                UNIQUE(source, start_time)
+            );
+
+            CREATE TABLE IF NOT EXISTS apple_daily (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                date        TEXT NOT NULL,
+                source      TEXT NOT NULL DEFAULT 'healthkit',
+                steps       INTEGER,
+                active_kcal REAL,
+                basal_kcal  REAL,
+                avg_hr_bpm  REAL,
+                max_hr_bpm  REAL,
+                vo2max      REAL,
+                weight_kg   REAL,
+                created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                UNIQUE(source, date)
+            );
+
+            CREATE TABLE IF NOT EXISTS metric_series (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                source      TEXT NOT NULL,
+                metric_name TEXT NOT NULL,
+                date        TEXT NOT NULL,
+                value       REAL NOT NULL,
+                created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                UNIQUE(source, metric_name, date)
+            );
+
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (1);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (2);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (3);
@@ -1761,7 +1820,8 @@ impl GooseStore {
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (17);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (18);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (19);
-            PRAGMA user_version = 19;
+            INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (20);
+            PRAGMA user_version = 20;
             "#,
         )?;
         self.ensure_raw_evidence_columns()?;
@@ -6882,6 +6942,142 @@ impl GooseStore {
             sig_quality,
         })
     }
+
+    pub fn insert_journal(
+        &self,
+        date: &str,
+        source: &str,
+        behaviors_json: &str,
+        notes: Option<&str>,
+    ) -> GooseResult<bool> {
+        let rows = self.conn.execute(
+            "INSERT OR REPLACE INTO journal (date, source, behaviors_json, notes)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![date, source, behaviors_json, notes],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn insert_workout(
+        &self,
+        date: &str,
+        source: &str,
+        sport: &str,
+        start_time: &str,
+        end_time: &str,
+        duration_s: f64,
+        activity_session_id: Option<&str>,
+        avg_hr_bpm: Option<f64>,
+        max_hr_bpm: Option<f64>,
+        strain: Option<f64>,
+        calories_kcal: Option<f64>,
+        distance_m: Option<f64>,
+        notes: Option<&str>,
+        provenance_json: &str,
+    ) -> GooseResult<bool> {
+        let rows = self.conn.execute(
+            "INSERT OR REPLACE INTO workout
+             (date, source, sport, start_time, end_time, duration_s,
+              activity_session_id, avg_hr_bpm, max_hr_bpm, strain,
+              calories_kcal, distance_m, notes, provenance_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                date,
+                source,
+                sport,
+                start_time,
+                end_time,
+                duration_s,
+                activity_session_id,
+                avg_hr_bpm,
+                max_hr_bpm,
+                strain,
+                calories_kcal,
+                distance_m,
+                notes,
+                provenance_json,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn insert_apple_daily(
+        &self,
+        date: &str,
+        source: &str,
+        steps: Option<i64>,
+        active_kcal: Option<f64>,
+        basal_kcal: Option<f64>,
+        avg_hr_bpm: Option<f64>,
+        max_hr_bpm: Option<f64>,
+        vo2max: Option<f64>,
+        weight_kg: Option<f64>,
+    ) -> GooseResult<bool> {
+        let rows = self.conn.execute(
+            "INSERT OR REPLACE INTO apple_daily
+             (date, source, steps, active_kcal, basal_kcal, avg_hr_bpm, max_hr_bpm, vo2max, weight_kg)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![date, source, steps, active_kcal, basal_kcal, avg_hr_bpm, max_hr_bpm, vo2max, weight_kg],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn insert_metric_series(
+        &self,
+        source: &str,
+        metric_name: &str,
+        date: &str,
+        value: f64,
+    ) -> GooseResult<bool> {
+        let rows = self.conn.execute(
+            "INSERT OR IGNORE INTO metric_series (source, metric_name, date, value)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![source, metric_name, date, value],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn query_metric_series_range(
+        &self,
+        metric_name: &str,
+        start_date: &str,
+        end_date: &str,
+        source: Option<&str>,
+    ) -> GooseResult<Vec<serde_json::Value>> {
+        let rows: Vec<serde_json::Value> = if let Some(src) = source {
+            let mut stmt = self.conn.prepare(
+                "SELECT date, value FROM metric_series \
+                 WHERE metric_name = ?1 AND source = ?2 \
+                   AND date >= ?3 AND date <= ?4 \
+                 ORDER BY date ASC",
+            )?;
+            stmt.query_map(params![metric_name, src, start_date, end_date], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })?
+            .filter_map(|r| {
+                r.map_err(|e| eprintln!("[metric_series] row error: {e}"))
+                    .ok()
+            })
+            .map(|(date, value)| serde_json::json!({"date": date, "value": value}))
+            .collect()
+        } else {
+            let mut stmt = self.conn.prepare(
+                "SELECT date, value FROM metric_series \
+                 WHERE metric_name = ?1 AND date >= ?2 AND date <= ?3 \
+                 ORDER BY date ASC",
+            )?;
+            stmt.query_map(params![metric_name, start_date, end_date], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })?
+            .filter_map(|r| {
+                r.map_err(|e| eprintln!("[metric_series] row error: {e}"))
+                    .ok()
+            })
+            .map(|(date, value)| serde_json::json!({"date": date, "value": value}))
+            .collect()
+        };
+        Ok(rows)
+    }
 }
 
 impl GooseStore {
@@ -8769,6 +8965,10 @@ pub fn known_tables() -> &'static [&'static str] {
         "events",
         "battery",
         "upload_cursors",
+        "journal",
+        "workout",
+        "apple_daily",
+        "metric_series",
     ]
 }
 
@@ -8950,8 +9150,8 @@ mod exercise_session_tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("failed to read user_version");
         assert_eq!(
-            version, 19,
-            "PRAGMA user_version should be 19 after v19 migration"
+            version, 20,
+            "PRAGMA user_version should be 20 after v20 migration"
         );
     }
 
@@ -9040,9 +9240,9 @@ mod sync_schema_tests {
     }
 
     #[test]
-    fn test_schema_version_is_19() {
+    fn test_schema_version_is_20() {
         let store = make_store();
-        assert_eq!(store.schema_version().unwrap(), 19);
+        assert_eq!(store.schema_version().unwrap(), 20);
     }
 
     #[test]
@@ -9489,6 +9689,96 @@ mod sync_methods_tests {
         assert_eq!(
             synced_flag, 1i64,
             "pre-captured row must be synced=1 after mark_synced_rows"
+        );
+    }
+}
+
+#[cfg(test)]
+mod v20_migration_tests {
+    use super::*;
+
+    fn open_migrated_store() -> GooseStore {
+        let store = GooseStore::open_in_memory().expect("open in-memory store");
+        store.migrate().expect("migrate");
+        store
+    }
+
+    #[test]
+    fn test_schema_version_is_20() {
+        let store = open_migrated_store();
+        let version: i64 = store
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("user_version");
+        assert_eq!(
+            version, 20,
+            "PRAGMA user_version must be 20 after migration"
+        );
+    }
+
+    #[test]
+    fn test_v20_tables_exist() {
+        let store = open_migrated_store();
+        for table in &["journal", "workout", "apple_daily", "metric_series"] {
+            let count: i64 = store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .expect("sqlite_master query");
+            assert_eq!(count, 1, "table '{}' must exist after v20 migration", table);
+        }
+    }
+
+    #[test]
+    fn test_migration_is_idempotent() {
+        let store = GooseStore::open_in_memory().expect("open in-memory store");
+        store.migrate().expect("first migration");
+        store.migrate().expect("second migration must not error");
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM goose_schema_migrations WHERE version=20",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count version=20");
+        assert_eq!(
+            count, 1,
+            "version=20 must appear exactly once after two migrate() calls"
+        );
+    }
+
+    #[test]
+    fn test_metric_series_unique_constraint() {
+        let store = open_migrated_store();
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO metric_series (source, metric_name, date, value) VALUES ('goose', 'hrv', '2026-06-01', 42.0)",
+                [],
+            )
+            .expect("first insert");
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO metric_series (source, metric_name, date, value) VALUES ('goose', 'hrv', '2026-06-01', 99.0)",
+                [],
+            )
+            .expect("second insert (should be ignored)");
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM metric_series WHERE source='goose' AND metric_name='hrv' AND date='2026-06-01'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(
+            count, 1,
+            "UNIQUE(source, metric_name, date) constraint must prevent duplicate rows"
         );
     }
 }

@@ -116,13 +116,13 @@ Known deferred: CAPSENSE-01 hardware gate (requires real WHOOP 5.x device for UU
 
 ### v10.0 Protocol Parity, Haptics & Feature Completeness
 
-- [ ] **Phase 67: WHOOP 5.0 Protocol Fixes** — R22 realtime packet parsing + v18 per-second historical decode (pure Rust, highest user impact)
+- [x] **Phase 67: WHOOP 5.0 Protocol Fixes** — R22 realtime packet parsing + v18 per-second historical decode (pure Rust, highest user impact) (completed 2026-06-12)
 - [x] **Phase 68: BLE Manager Refactor + Data Validator** — GooseBLEHistoricalManager dedicated class + GooseBLEDataValidator Swift struct (completed 2026-06-12)
-- [ ] **Phase 69: Data Foundation** — 4 new SQLite tables (schema v20) + realtime strain accumulator
+- [x] **Phase 69: Data Foundation** — 4 new SQLite tables (schema v20) + realtime strain accumulator (completed 2026-06-12)
 - [ ] **Phase 70: Haptic Primitive + Breathe Screen** — buzz(loops:) cmd 0x13 + Breathe UI with paced haptic cues
-- [ ] **Phase 71: Coach VOW + NoopApp Features + Notifications + HR Decimation** — contextual nudges, Interval Timer, Metric Explorer, iOS local notifications, HR chart performance
+- [x] **Phase 71: Coach VOW + NoopApp Features + Notifications + HR Decimation** — contextual nudges, Interval Timer, Metric Explorer, iOS local notifications, HR chart performance (completed 2026-06-12)
 - [ ] **Phase 72: Screens on New Foundation + Service Layer** — Stress/ANS view, Trends dashboard, Manual Workout Entry, protocol-based service layer + mocks
-- [ ] **Phase 73: Smart Alarm + Wake-Window Engine** — HAP-03 single-shot alarm UI + HAP-04 RE-gated wake-window engine
+- [x] **Phase 73: Smart Alarm + Wake-Window Engine** — HAP-03 single-shot alarm UI + HAP-04 RE-gated wake-window engine (completed 2026-06-12)
 
 ## Phase Details
 
@@ -186,7 +186,14 @@ Plans:
   3. `cargo test` passes in full, including migration tests verifying the v19→v20 migration arm is idempotent
   4. Multiple concurrent GooseRustBridge instances writing to metricSeries produce no duplicate rows (idempotent insert pattern)
 
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+
+**Wave 1** *(parallel — Rust and Swift are independent)*
+
+- [x] 69-01-PLAN.md — DATA-01: schema v20 migration (4 tables) + 4 bridge upsert methods + migration tests
+- [ ] 69-02-PLAN.md — DATA-02: GooseStrainAccumulator actor + GooseAppModel wiring (liveWorkoutStrain)
 
 ### Phase 70: Haptic Primitive + Breathe Screen
 
@@ -200,8 +207,14 @@ Plans:
   3. The Breathe session can be started and stopped by the user; stopping mid-session does not leave the BLE command characteristic in an undefined state
   4. No buzz is attempted when no WHOOP device is connected — the UI shows an appropriate disabled state
 
-**Plans**: TBD
-**UI hint**: yes
+**Plans**: 2 plans
+
+Plans:
+
+**Wave 1** *(parallel)*
+
+- [x] 70-01-PLAN.md — HAP-01: GooseBLEClient+Haptics.swift with buzz(loops:) — fire-and-forget BLE cmd 0x13
+- [ ] 70-02-PLAN.md — HAP-02: BreatheView.swift + MoreRoute.breathe navigation wiring + MoreDataStore updates
 
 ### Phase 71: Coach VOW + NoopApp Features + Notifications + HR Decimation
 
@@ -215,8 +228,19 @@ Plans:
   3. A local notification fires after a detected sleep cycle completes, after a workout session is detected, and when WHOOP battery drops below 20% — all using the existing `UNUserNotificationCenter` permission granted in onboarding
   4. The HR chart for a session longer than 60 minutes renders without visible lag; the in-memory sample count is reduced via stride/LTTB decimation while local extrema are preserved
 
-**Plans**: TBD
-**UI hint**: yes
+**Plans**: 4 plans
+
+Plans:
+
+**Wave 1** *(parallel)*
+
+- [x] 71-01-PLAN.md — FEAT-01: Coach VOW card (CoachVOWNudge enum + CoachVOWCard view in CoachView.swift)
+- [x] 71-02-PLAN.md — DATA-04: HeartRateSeriesStore.decimatedSamples + migrate 4 HealthDataStore+* call sites
+
+**Wave 2** *(parallel — no dependency on Wave 1)*
+
+- [x] 71-03-PLAN.md — FEAT-02: IntervalTimerView + MetricExplorerView + MoreRoute wiring (5 files)
+- [x] 71-04-PLAN.md — FEAT-03: NotificationScheduler actor + 3 scheduling sites (sleep / workout / battery)
 
 ### Phase 72: Screens on New Foundation + Service Layer
 
@@ -230,8 +254,18 @@ Plans:
   3. A Manual Workout Entry sheet allows the user to log a workout with sport tag, duration, and perceived effort — the entry is persisted to the workout table
   4. `GooseBLEManaging`, `GooseRustBridging`, and `HealthDataStoring` protocols exist; mock implementations exist in the test target; at least 2 unit tests use the mocks and pass with `cargo test` or Swift test runner
 
-**Plans**: TBD
-**UI hint**: yes
+**Plans**: 3 plans
+
+Plans:
+
+**Wave 1** *(parallel)*
+
+- [ ] 72-01-PLAN.md — DATA-03: Rust metric_series.query_range bridge method + store.rs query function + round-trip test
+- [x] 72-02-PLAN.md — DATA-03: ANS Balance tiles in StressV2OverviewPage + TrendsDashboardView + ManualWorkoutEntrySheet + pbxproj
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 72-03-PLAN.md — ARCH-01: GooseRustBridging + GooseBLEManaging + HealthDataStoring protocols + mocks + 2 unit tests
 
 ### Phase 73: Smart Alarm + Wake-Window Engine
 
@@ -246,7 +280,15 @@ Plans:
   3. (HAP-04 — RE-gated) `GooseWakeWindowManager` exists and monitors sleep state via bridge polling; it fires `buzz(loops:)` at the lightest-sleep moment within the user's alarm window
   4. (HAP-04 — RE-gated) The wake-window wire format is derived from confirmed `SetAlarmInfoCommandPacketRev4` field layout — no speculative byte assignments
 
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+
+**Wave 1** *(parallel)*
+
+- [x] 73-01-PLAN.md — HAP-03: Wake Alarm UI in CoachSleepRouteView + GooseAppModel alarm state properties
+- [x] 73-02-PLAN.md — HAP-04 stub: GooseWakeWindowManager.swift (RE-gated, compilable stub + pbxproj registration)
+
 **UI hint**: yes
 
 ## Progress
@@ -271,13 +313,13 @@ Plans:
 | 64. HR Data Sanitizer | v9.0 | 2/2 | Complete | 2026-06-11 |
 | 65. Generic BLE State Machine | v9.0 | 1/1 | Complete | 2026-06-11 |
 | 66. Cap Sense / On-Wrist Detection | v9.0 | 0/TBD | Not started | - |
-| 67. WHOOP 5.0 Protocol Fixes | v10.0 | 0/TBD | Not started | - |
+| 67. WHOOP 5.0 Protocol Fixes | v10.0 | 2/2 | Complete | 2026-06-12 |
 | 68. BLE Manager Refactor + Data Validator | v10.0 | 2/2 | Complete    | 2026-06-12 |
-| 69. Data Foundation | v10.0 | 0/TBD | Not started | - |
-| 70. Haptic Primitive + Breathe Screen | v10.0 | 0/TBD | Not started | - |
-| 71. Coach VOW + NoopApp Features + Notifications + HR Decimation | v10.0 | 0/TBD | Not started | - |
-| 72. Screens on New Foundation + Service Layer | v10.0 | 0/TBD | Not started | - |
-| 73. Smart Alarm + Wake-Window Engine | v10.0 | 0/TBD | Not started | - |
+| 69. Data Foundation | v10.0 | 2/2 | Complete | 2026-06-12 |
+| 70. Haptic Primitive + Breathe Screen | v10.0 | 1/2 | In Progress|  |
+| 71. Coach VOW + NoopApp Features + Notifications + HR Decimation | v10.0 | 4/4 | Complete   | 2026-06-12 |
+| 72. Screens on New Foundation + Service Layer | v10.0 | 1/3 | In Progress|  |
+| 73. Smart Alarm + Wake-Window Engine | v10.0 | 2/2 | Complete   | 2026-06-12 |
 
 ## Backlog
 

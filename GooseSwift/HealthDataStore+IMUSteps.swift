@@ -19,14 +19,15 @@ extension IMUStepCountResult {
 // MARK: - HealthDataStore+IMUSteps
 
 extension HealthDataStore {
-  // Fetches K10 gravity rows from today's window, runs imu_step_count_v1,
-  // and compares with the WHOOP step counter from packetInputReports.
+  // Reads K10 accelerometer data directly from decoded_frames for today's window,
+  // runs imu_step_count_v1, and compares with the WHOOP step counter from
+  // packetInputReports. Bypasses the gravity table — works for all users
+  // regardless of whether server upload is configured.
   // Result is published on @MainActor.
   func runIMUStepCount() async {
     let db = databasePath
     let now = Date().timeIntervalSince1970
     let windowStart = now - 24 * 3600
-    let deviceID = "goose.swift.imu.steps.v1"
     // Capture WHOOP step count from packetInputReports on @MainActor before first await.
     let stepReport = packetInputReports["step_counter_rollup"]
 
@@ -40,38 +41,16 @@ extension HealthDataStore {
       }
     }
 
-    // Fetch gravity rows for today.
-    let gravityReport: [String: Any]
-    do {
-      gravityReport = try await bridge.requestAsync(
-        method: "store.gravity_rows_between",
-        args: [
-          "database_path": db,
-          "device_id": deviceID,
-          "start_ts": windowStart,
-          "end_ts": now,
-        ]
-      )
-    } catch {
-      imuStepCountResult = nil
-      return
-    }
-
-    let gravityRows = gravityReport["rows"] as? [[String: Any]] ?? []
-    // Build gravity_samples as [[x, y, z]] arrays.
-    let gravitySamples: [[Double]] = gravityRows.compactMap { row -> [Double]? in
-      guard let x = asDouble(row["x"]),
-            let y = asDouble(row["y"]),
-            let z = asDouble(row["z"]) else { return nil }
-      return [x, y, z]
-    }
-
-    // Call metrics.imu_step_count_v1.
+    // Read K10 frames from decoded_frames and compute step count in one bridge call.
     let imuResult: IMUStepCountResult
     do {
       let report = try await bridge.requestAsync(
-        method: "metrics.imu_step_count_v1",
-        args: ["gravity_samples": gravitySamples]
+        method: "metrics.imu_step_count_from_decoded_frames",
+        args: [
+          "database_path": db,
+          "start_ts": windowStart,
+          "end_ts": now,
+        ]
       )
       let stepCount = (report["step_count"] as? NSNumber)?.intValue
         ?? (report["step_count"] as? Int) ?? 0
@@ -88,7 +67,7 @@ extension HealthDataStore {
     } catch {
       imuResult = IMUStepCountResult(
         stepCount: 0,
-        sampleCount: gravitySamples.count,
+        sampleCount: 0,
         meanMagnitude: 0,
         insufficientData: true
       )

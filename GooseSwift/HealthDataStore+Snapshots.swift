@@ -993,7 +993,7 @@ extension HealthDataStore {
   //    (approximated from published WHOOP descriptions of typical session values).
   // 5. Scale to 0–100 for the dial: score = (strain_0_21 / 21) * 100
   func hkStrainScore() -> Double? {
-    let todaySamples = heartRateSeriesStore.samples(forDayContaining: Date())
+    let todaySamples = heartRateSeriesStore.decimatedSamples(forDayContaining: Date())
       .sorted { $0.capturedAt < $1.capturedAt }
     guard todaySamples.count >= 3 else { return nil }
 
@@ -1126,7 +1126,7 @@ extension HealthDataStore {
 
     for daysBack in 1...7 {
       guard let day = cal.date(byAdding: .day, value: -daysBack, to: Date()) else { continue }
-      let samples = heartRateSeriesStore.samples(forDayContaining: day)
+      let samples = heartRateSeriesStore.decimatedSamples(forDayContaining: day)
         .sorted { $0.capturedAt < $1.capturedAt }
       guard samples.count >= 3 else { continue }
       var trimp = 0.0
@@ -1144,6 +1144,33 @@ extension HealthDataStore {
     let result = dailyTrimpValues.isEmpty ? nil : dailyTrimpValues.reduce(0, +) / Double(dailyTrimpValues.count)
     sevenDayStrainCache = (value: result, computedAt: Date())
     return result
+  }
+
+  // MARK: - Trends Series (DATA-03)
+
+  func fetchTrendsSeries(metricName: String, days: Int = 7) async throws -> [(date: String, value: Double)] {
+    let calendar = Calendar.current
+    let now = Date()
+    let startDate = calendar.date(byAdding: .day, value: -(days - 1), to: now) ?? now
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd"
+    let start = formatter.string(from: startDate)
+    let end = formatter.string(from: now)
+    let result = try await bridge.requestAsync(
+      method: "metric_series.query_range",
+      args: [
+        "database_path": databasePath,
+        "metric_name": metricName,
+        "start_date": start,
+        "end_date": end,
+      ]
+    )
+    let rows = result["rows"] as? [[String: Any]] ?? []
+    return rows.compactMap { row in
+      guard let date = row["date"] as? String,
+            let value = row["value"] as? Double else { return nil }
+      return (date: date, value: value)
+    }
   }
 
 }
