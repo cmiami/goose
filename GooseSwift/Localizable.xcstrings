@@ -8614,6 +8614,16 @@
         }
       }
     },
+    "This provider could not be configured. Please reselect it above." : {
+      "localizations" : {
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível configurar este fornecedor. Selecione-o novamente acima."
+          }
+        }
+      }
+    },
     "This action removes the local SQLite database and cannot be undone. Data on the server is not affected." : {
       "localizations" : {
         "pt-PT" : {
