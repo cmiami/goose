@@ -22,6 +22,8 @@ struct OnboardingView: View {
   @State private var bluetoothPermissionResolved = OnboardingPermissionState.bluetoothResolved()
   @State private var locationPermissionResolved = OnboardingPermissionState.locationResolved()
   @State private var notificationPermissionResolved = false
+  @State private var bluetoothDenied = OnboardingPermissionState.bluetoothDenied()
+  @State private var showBluetoothSkipWarning = false
   @FocusState private var focusedField: OnboardingInputField?
 
   @AppStorage(OnboardingStorage.firstName) private var firstName = ""
@@ -89,7 +91,8 @@ struct OnboardingView: View {
     }
     .onChange(of: model.ble.bluetoothState) { _, _ in
       bluetoothPermissionResolved = OnboardingPermissionState.bluetoothResolved()
-      if step == .bluetooth, shouldSkip(.bluetooth) {
+      bluetoothDenied = OnboardingPermissionState.bluetoothDenied()
+      if step == .bluetooth, !bluetoothDenied, shouldSkip(.bluetooth) {
         moveForward()
       }
     }
@@ -144,16 +147,18 @@ struct OnboardingView: View {
       OnboardingPermissionStep(
         systemImage: "bluetooth",
         title: "Bluetooth",
-        bodyText: "Goose needs Bluetooth to find your owned WHOOP strap and keep the local connection live.",
+        bodyText: bluetoothDenied
+          ? "Bluetooth is turned off for Goose. Open Settings to allow it — without Bluetooth, Goose can't find or read your strap."
+          : "Goose needs Bluetooth to find your owned WHOOP strap and keep the local connection live.",
         details: [
           "Scan for nearby WHOOP services",
           "Connect to the selected strap",
           "Read live battery, firmware, and strap notifications",
         ],
-        buttonTitle: "Enable Bluetooth",
+        buttonTitle: bluetoothDenied ? "Open Settings" : "Enable Bluetooth",
         isRequesting: false,
         tint: .blue,
-        action: requestBluetoothAccess
+        action: bluetoothDenied ? openAppSettings : requestBluetoothAccess
       )
     case .notifications:
       OnboardingPermissionStep(
@@ -172,6 +177,8 @@ struct OnboardingView: View {
       )
     case .connect:
       OnboardingConnectStep(ble: model.ble)
+    case .whatHappensNext:
+      OnboardingWhatHappensNextStep(bluetoothAuthorized: OnboardingPermissionState.bluetoothAuthorized())
     }
   }
 
@@ -194,11 +201,27 @@ struct OnboardingView: View {
         )
       }
       Button(String(localized: "Skip setup")) {
-        onComplete()
+        attemptSkipSetup()
       }
       .font(.footnote)
       .foregroundStyle(.secondary)
       .padding(.vertical, 12)
+    }
+    .confirmationDialog(
+      "Goose can't read your strap",
+      isPresented: $showBluetoothSkipWarning,
+      titleVisibility: .visible
+    ) {
+      Button("Open Settings") {
+        openAppSettings()
+      }
+      Button("Skip anyway", role: .destructive) {
+        model.recordUIAction("onboarding.skip.bluetooth_denied_confirmed")
+        onComplete()
+      }
+      Button("Back", role: .cancel) {}
+    } message: {
+      Text("Without Bluetooth, Goose cannot connect to your WHOOP or capture any data. You can enable it now, or turn it on later in Settings.")
     }
   }
 
@@ -458,10 +481,30 @@ struct OnboardingView: View {
   private func requestBluetoothAccess() {
     model.ble.requestBluetooth()
     bluetoothPermissionResolved = OnboardingPermissionState.bluetoothResolved()
+    bluetoothDenied = OnboardingPermissionState.bluetoothDenied()
     model.recordUIAction("onboarding.bluetooth.requested")
-    if shouldSkip(.bluetooth) {
+    if !bluetoothDenied, shouldSkip(.bluetooth) {
       moveForward()
     }
+  }
+
+  private func openAppSettings() {
+    guard let url = URL(string: UIApplication.openSettingsURLString) else {
+      return
+    }
+    model.recordUIAction("onboarding.bluetooth.open_settings")
+    UIApplication.shared.open(url)
+  }
+
+  private func attemptSkipSetup() {
+    if OnboardingPermissionState.bluetoothDenied() {
+      bluetoothDenied = true
+      showBluetoothSkipWarning = true
+      model.recordUIAction("onboarding.skip.bluetooth_denied_warning")
+      return
+    }
+    model.recordUIAction("onboarding.skip")
+    onComplete()
   }
 
   private func requestNotificationAccess() {
@@ -588,6 +631,7 @@ struct OnboardingView: View {
 
   private func refreshPermissionState() {
     bluetoothPermissionResolved = OnboardingPermissionState.bluetoothResolved()
+    bluetoothDenied = OnboardingPermissionState.bluetoothDenied()
     locationPermissionResolved = OnboardingPermissionState.locationResolved()
     if locationPermissionResolved {
       locationPermissionHandled = true
@@ -605,7 +649,7 @@ struct OnboardingView: View {
 
   private func shouldSkip(_ candidate: OnboardingStep) -> Bool {
     switch candidate {
-    case .profile, .connect:
+    case .profile, .connect, .whatHappensNext:
       return false
     case .healthKit:
       return healthKitPermissionHandled || !HKHealthStore.isHealthDataAvailable()

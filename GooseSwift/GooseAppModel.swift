@@ -117,6 +117,7 @@ final class GooseAppModel {
   var autoStartHealthPacketCaptureAttempt = 0
   var autoStartRespiratoryPacketWatchAttempt = 0
   var passiveActivityCaptureWorkItem: DispatchWorkItem?
+  var stepCounterPollTimer: DispatchSourceTimer?
   var healthPacketCaptureFamilyRowsByID: [String: HealthPacketCaptureFamily] = [:]
   // Stored property so @Observable tracks changes and SwiftUI views invalidate correctly.
   // Kept in sync with GooseBLEBondingManager via the onBondingStateChange callback in init().
@@ -390,6 +391,7 @@ final class GooseAppModel {
     temperatureHistorySyncWorkItem?.cancel()
     autoStartHealthPacketCaptureWorkItem?.cancel()
     passiveActivityCaptureWorkItem?.cancel()
+    stepCounterPollTimer?.cancel()
   }
 
   private nonisolated func runStorageCompactionIfNeeded() {

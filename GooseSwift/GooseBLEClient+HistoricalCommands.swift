@@ -11,6 +11,10 @@ extension GooseBLEClient {
     rangeOnly: Bool = false,
     acknowledgeHistoricalDataResult: Bool = true
   ) {
+    // Set FIRST, before any guard: the guards below can call failHistoricalSync,
+    // and that path branches on currentSyncIsAutomatic to decide whether the
+    // failure is silent (automatic) or surfaces a modal sheet + red toast (manual).
+    currentSyncIsAutomatic = automatic
     guard !isHistoricalSyncing else {
       record(level: .debug, source: "ble.sync", title: "historical_sync.skipped", body: "already syncing trigger=\(trigger)")
       return

@@ -1,6 +1,7 @@
 import CoreBluetooth
 import Foundation
 import OSLog
+@preconcurrency import UserNotifications
 
 
 extension GooseBLEClient {
@@ -752,9 +753,22 @@ extension GooseBLEClient {
       : historicalManager.historicalPacketsReceivedThisSync == 0
       ? "No missed packets found"
       : "\(historicalManager.historicalPacketsReceivedThisSync) historical \(historicalManager.historicalPacketsReceivedThisSync == 1 ? "packet" : "packets") captured"
-    publishSyncToast(phase: .synced, detail: detail, clearAfter: 2.2)
+    let wasAutomatic = currentSyncIsAutomatic
+    consecutiveAutomaticSyncFailures = 0
+    if wasAutomatic {
+      lastAutomaticHistoricalSyncAt = completedAt
+    }
+    // Silent no-op recovery: an automatic background sync that captured no
+    // packets must not flash a green "Synced" toast. Manual syncs, and any
+    // sync that actually captured packets, still confirm visibly.
+    if wasAutomatic && historicalManager.historicalPacketsReceivedThisSync == 0 {
+      syncClearWorkItem?.cancel()
+      syncToast = nil
+    } else {
+      publishSyncToast(phase: .synced, detail: detail, clearAfter: 2.2)
+    }
     notifyHistoricalSyncProgress(status: "synced", detail: detail, terminal: true, failed: false)
-    record(source: "ble.sync", title: "historical_sync.completed", body: "reason=\(reason) \(detail)")
+    record(source: "ble.sync", title: "historical_sync.completed", body: "reason=\(reason) automatic=\(wasAutomatic) \(detail)")
   }
 
   func failHistoricalSync(_ message: String) {
@@ -785,10 +799,51 @@ extension GooseBLEClient {
     publishHistoricalPacketCountIfNeeded(force: true)
     let failure = GooseSyncFailure(title: "Sync Failed", message: message, occurredAt: Date())
     lastSyncFailure = failure
-    syncFailureSheet = failure
-    publishSyncToast(phase: .failed, detail: "Tap for details", clearAfter: 4.5)
+    if currentSyncIsAutomatic {
+      // Disconnects are normal — an automatic sync failure is not an alarm.
+      // No modal sheet, no red toast. Clear any stale "Syncing" toast, then
+      // only escalate to a single local notification after enough consecutive
+      // failures that the strap has plausibly drifted out of range for a while.
+      syncClearWorkItem?.cancel()
+      syncToast = nil
+      consecutiveAutomaticSyncFailures += 1
+      record(
+        level: .debug,
+        source: "ble.sync",
+        title: "historical_sync.auto_failed",
+        body: "consecutive=\(consecutiveAutomaticSyncFailures) \(message)"
+      )
+      // Fire the local notification exactly once, when the streak first reaches
+      // the threshold — not on every subsequent failure (avoids re-alerting).
+      if consecutiveAutomaticSyncFailures == Self.automaticSyncFailureNotifyThreshold {
+        notifyRepeatedAutomaticSyncFailure()
+      }
+    } else {
+      syncFailureSheet = failure
+      publishSyncToast(phase: .failed, detail: "Tap for details", clearAfter: 4.5)
+      record(level: .error, source: "ble.sync", title: "historical_sync.failed", body: message)
+    }
     notifyHistoricalSyncProgress(status: "failed", detail: message, terminal: true, failed: true)
-    record(level: .error, source: "ble.sync", title: "historical_sync.failed", body: message)
+  }
+
+  func notifyRepeatedAutomaticSyncFailure() {
+    let center = UNUserNotificationCenter.current()
+    center.getNotificationSettings { settings in
+      guard settings.authorizationStatus == .authorized else {
+        return
+      }
+      let content = UNMutableNotificationContent()
+      content.title = "Goose hasn't synced in a while"
+      content.body = "Keep your strap nearby and Bluetooth on. Goose will keep trying automatically."
+      content.sound = .default
+      let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+      let request = UNNotificationRequest(
+        identifier: "goose.sync.repeated_automatic_failure",
+        content: content,
+        trigger: trigger
+      )
+      center.add(request)
+    }
   }
 
   func notifyHistoricalSyncProgress(status: String, detail: String, terminal: Bool, failed: Bool) {

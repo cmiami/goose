@@ -81,6 +81,7 @@ extension GooseBLEClient: CBCentralManagerDelegate {
       }
     } else {
       isScanning = false
+      stopPeriodicAutomaticSyncTimer()
       if isHistoricalSyncing {
         failHistoricalSync("Bluetooth became unavailable during historical sync. State: \(bluetoothState).")
       }
@@ -276,6 +277,7 @@ extension GooseBLEClient: CBCentralManagerDelegate {
     autoConnectForPhysiologyCapture = false
     autoStartedPhysiologyCapture = false
     readySyncWorkItem?.cancel()
+    stopPeriodicAutomaticSyncTimer()
     if isHistoricalSyncing {
       failHistoricalSync("WHOOP disconnected during historical sync. \(error?.localizedDescription ?? "No CoreBluetooth error was provided.")")
     }

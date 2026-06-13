@@ -1091,6 +1091,10 @@ extension GooseBLEClient {
     }
     readySyncWorkItem = workItem
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: workItem)
+    // Arm the across-the-day cadence now that we are ready; cancelled on
+    // disconnect / Bluetooth off. Safe to call repeatedly — it replaces any
+    // existing timer.
+    startPeriodicAutomaticSyncTimer()
     record(source: "ble.sync", title: "historical_sync.scheduled", body: reason)
   }
 

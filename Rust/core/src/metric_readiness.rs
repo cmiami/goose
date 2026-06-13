@@ -601,3 +601,129 @@ fn input_plan(input_name: &str) -> InputPlan {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capture_correlation::{
+        CAPTURE_CORRELATION_REPORT_SCHEMA, CaptureCorrelationReport, CaptureCorrelationSummary,
+    };
+
+    fn trusted_summary(kind: &str) -> CaptureCorrelationSummary {
+        CaptureCorrelationSummary {
+            body_summary_kind: kind.to_string(),
+            observation_count: 1,
+            owned_capture_count: 1,
+            synthetic_count: 0,
+            warning_count: 0,
+            trusted_metric_ready: true,
+            blocker_reasons: Vec::new(),
+            next_capture_actions: Vec::new(),
+        }
+    }
+
+    fn fully_trusted_correlation() -> CaptureCorrelationReport {
+        CaptureCorrelationReport {
+            schema: CAPTURE_CORRELATION_REPORT_SCHEMA.to_string(),
+            generated_by: "goose-metric-input-readiness-test".to_string(),
+            fixture_root: "test".to_string(),
+            pass: true,
+            min_owned_captures_per_summary: 1,
+            require_owned_captures: false,
+            observations: Vec::new(),
+            summaries: vec![
+                trusted_summary("r17_optical_or_labrador_filtered"),
+                trusted_summary("normal_history"),
+                trusted_summary("event_temperature_level"),
+                trusted_summary("raw_motion_k10"),
+                trusted_summary("raw_motion_k21"),
+            ],
+            issues: Vec::new(),
+            next_capture_actions: Vec::new(),
+        }
+    }
+
+    fn find_input<'a>(
+        report: &'a MetricInputReadinessReport,
+        input_name: &str,
+    ) -> &'a MetricInputReadiness {
+        report
+            .families
+            .iter()
+            .flat_map(|family| family.inputs.iter())
+            .find(|input| input.input_name == input_name)
+            .unwrap_or_else(|| panic!("input {input_name} not present in any metric family"))
+    }
+
+    #[test]
+    fn test_hrv_rr_interval_gates_stay_blocked() {
+        let correlation = fully_trusted_correlation();
+        let report = run_metric_input_readiness(
+            &correlation,
+            MetricInputReadinessOptions {
+                require_scores_ready: false,
+            },
+        );
+
+        for input_name in ["rr_intervals_ms", "hrv_rmssd_ms", "hrv_baseline_rmssd_ms"] {
+            let input = find_input(&report, input_name);
+            assert_eq!(input.status, "blocked", "{input_name}");
+            assert!(
+                input
+                    .blocker_reasons
+                    .iter()
+                    .any(|reason| reason == "hrv_rr_interval_scale_unverified"),
+                "{input_name} blocker_reasons={:?}",
+                input.blocker_reasons
+            );
+            assert!(
+                input
+                    .next_actions
+                    .iter()
+                    .any(|action| action.reason == "hrv_rr_interval_scale_unverified"),
+                "{input_name} next_actions={:?}",
+                input.next_actions
+            );
+        }
+    }
+
+    #[test]
+    fn test_respiratory_and_temp_gates_stay_blocked() {
+        let correlation = fully_trusted_correlation();
+        let report = run_metric_input_readiness(
+            &correlation,
+            MetricInputReadinessOptions {
+                require_scores_ready: false,
+            },
+        );
+
+        let respiratory = find_input(&report, "respiratory_rate_rpm");
+        assert_eq!(respiratory.status, "blocked");
+        assert!(
+            respiratory
+                .blocker_reasons
+                .iter()
+                .any(|reason| reason == "respiratory_rate_semantics_unverified"),
+            "respiratory_rate_rpm blocker_reasons={:?}",
+            respiratory.blocker_reasons
+        );
+
+        let skin_temp = find_input(&report, "skin_temp_delta_c");
+        assert_eq!(skin_temp.status, "blocked");
+        assert!(
+            skin_temp
+                .blocker_reasons
+                .iter()
+                .any(|reason| reason == "temperature_units_unverified"),
+            "skin_temp_delta_c blocker_reasons={:?}",
+            skin_temp.blocker_reasons
+        );
+    }
+
+    #[test]
+    fn test_unmapped_input_reports_input_mapping_not_defined() {
+        let plan = input_plan("a_signal_that_has_no_mapping");
+        assert!(!plan.extraction_ready);
+        assert_eq!(plan.blocker, "input_mapping_not_defined");
+    }
+}

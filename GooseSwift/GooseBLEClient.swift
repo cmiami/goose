@@ -143,8 +143,14 @@ import OSLog
   }()
   let autoHistoricalSyncOnReady: Bool = {
     let processInfo = ProcessInfo.processInfo
-    return processInfo.arguments.contains("--goose-auto-historical-sync")
-      || processInfo.environment["GOOSE_AUTO_HISTORICAL_SYNC"] == "1"
+    // Production default ON. An explicit disable flag still wins so QA and
+    // capture-focused launches can opt out; the legacy opt-in args remain
+    // honored as redundant true.
+    if processInfo.arguments.contains("--goose-disable-auto-historical-sync")
+      || processInfo.environment["GOOSE_AUTO_HISTORICAL_SYNC"] == "0" {
+      return false
+    }
+    return true
   }()
   let diagnosticLoggingEnabled: Bool = {
     let processInfo = ProcessInfo.processInfo
@@ -290,6 +296,13 @@ import OSLog
   var startupReconnectAttempted = false
   var pendingConnectionReason: String?
   var pendingAutomaticHistoricalSyncReason: String?
+  // Set FIRST in beginHistoricalSync so the early guards inherit the correct
+  // automatic-vs-manual classification. Automatic failures are silent (debug
+  // only); manual failures keep the modal sheet + red toast.
+  var currentSyncIsAutomatic = false
+  var consecutiveAutomaticSyncFailures = 0
+  var lastAutomaticHistoricalSyncAt = Date.distantPast
+  var periodicSyncTimer: DispatchSourceTimer?
   var clientHelloSentForCurrentConnection = false
   var readySyncWorkItem: DispatchWorkItem?
   var syncClearWorkItem: DispatchWorkItem?
@@ -372,6 +385,8 @@ import OSLog
   static let historicalFrameFlushBatchSize = 32
   static let historicalPacketCountPublishInterval: TimeInterval = 1
   static let historicalProgressCallbackInterval: TimeInterval = 1
+  static let periodicAutomaticSyncInterval: TimeInterval = 30 * 60
+  static let automaticSyncFailureNotifyThreshold = 3
   static let strapClockAutoSyncThresholdSeconds: TimeInterval = 5
   static let diagnosticLogFormatter: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()

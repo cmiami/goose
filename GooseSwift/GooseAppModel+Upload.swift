@@ -150,6 +150,10 @@ extension GooseAppModel {
     let bridge = GooseRustBridge()
     serverImportInProgress = true
 
+    // Ingest the locally-captured HR/HRV sidecar alongside the server pull so the
+    // validated sidecar readings reach the store regardless of server contents.
+    ingestSidecarSamplesIntoDatabase()
+
     Task.detached(priority: .utility) { [weak self] in
       guard let self else { return }
 
@@ -284,6 +288,128 @@ extension GooseAppModel {
           body: "raw_frames=\(frames) devices=\(deviceIDs.count)"
         )
       }
+    }
+  }
+
+  // Ingests the on-disk HR/HRV sidecar JSON (written by HeartRateSeriesStore /
+  // HRVSeriesStore) into the SQLite store via the S3 batch bridge methods, so
+  // real captured BPM and pre-computed RMSSD reach hr_rr / hrv_samples and unlock
+  // the validated metric fallbacks. Pure ingest of already-validated sidecar data;
+  // idempotent via the stores' UNIQUE(device_id, ts) constraint.
+  //
+  // Honesty rules:
+  //   - capturedAt is the timestamp source for ts (NOT the millisecond row id).
+  //   - Rows missing a real reading are dropped, never coerced to 0/false.
+  //   - No device id => nothing to attribute the rows to, so we skip.
+  func ingestSidecarSamplesIntoDatabase() {
+    guard let deviceID = ble.activeDeviceIdentifier?.uuidString ?? ble.selectedDeviceID?.uuidString else {
+      return
+    }
+    let db = HealthDataStore.defaultDatabasePath()
+    let baseDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+      ?? FileManager.default.temporaryDirectory
+    let directory = baseDirectory.appendingPathComponent("GooseSwift", isDirectory: true)
+    let hrURL = directory.appendingPathComponent("heart-rate-samples.json")
+    let hrvURL = directory.appendingPathComponent("hrv-samples.json")
+    let bridge = GooseRustBridge()
+
+    Task.detached(priority: .utility) { [weak self] in
+      guard let self else { return }
+
+      // HR sidecar -> store.insert_hr_rr_batch. The HR sidecar holds BPM only
+      // (never RR), so rr_intervals is omitted (the Rust arg defaults it to
+      // empty). Rows are decoded individually so a single malformed element is
+      // dropped rather than failing the whole batch; a missing bpm fails the
+      // row's Codable decode and the row is skipped — never coerced to 0.
+      let hrSamples = Self.decodeSidecarSamples(HeartRateSamplePoint.self, at: hrURL)
+      var hrRowsInserted = 0
+      let hrRows: [[String: Any]] = hrSamples.map { sample in
+        [
+          "ts": sample.capturedAt.timeIntervalSince1970,
+          "bpm": sample.bpm,
+        ]
+      }
+      if !hrRows.isEmpty {
+        _ = try? bridge.request(
+          method: "store.insert_hr_rr_batch",
+          args: [
+            "database_path": db,
+            "device_id": deviceID,
+            "hr_samples": hrRows,
+          ]
+        )
+        hrRowsInserted = hrRows.count
+      }
+
+      // HRV sidecar -> store.insert_hrv_rmssd_batch. rmssd_ms is taken DIRECTLY
+      // from the stored scalar; rr_interval_count and source are passed through.
+      // A missing rmssdMS/count fails the row's Codable decode and the row is
+      // skipped — never coerced to 0.
+      let hrvSamples = Self.decodeSidecarSamples(HRVSamplePoint.self, at: hrvURL)
+      var hrvRowsInserted = 0
+      let hrvRows: [[String: Any]] = hrvSamples.map { sample in
+        [
+          "ts": sample.capturedAt.timeIntervalSince1970,
+          "rmssd_ms": sample.rmssdMS,
+          "rr_interval_count": sample.rrIntervalCount,
+          "source": sample.source,
+        ]
+      }
+      if !hrvRows.isEmpty {
+        _ = try? bridge.request(
+          method: "store.insert_hrv_rmssd_batch",
+          args: [
+            "database_path": db,
+            "device_id": deviceID,
+            "samples": hrvRows,
+          ]
+        )
+        hrvRowsInserted = hrvRows.count
+      }
+
+      let hrCount = hrRowsInserted
+      let hrvCount = hrvRowsInserted
+      await MainActor.run { [weak self] in
+        self?.ble.record(
+          level: .debug,
+          source: "import.sidecar",
+          title: "ingest.complete",
+          body: "hr_rows=\(hrCount) hrv_rows=\(hrvCount) device=\(deviceID)"
+        )
+      }
+    }
+  }
+
+  // Decodes a sidecar JSON file element-by-element so one malformed row is
+  // dropped instead of discarding the whole batch. Handles both the
+  // {version, samples:[...]} wrapper and a bare [...] array. A row missing a
+  // required field fails its Codable decode and is skipped — never coerced.
+  nonisolated private static func decodeSidecarSamples<T: Decodable>(
+    _ type: T.Type,
+    at url: URL
+  ) -> [T] {
+    guard let data = try? Data(contentsOf: url) else {
+      return []
+    }
+    let rawArray: [Any]
+    if let object = try? JSONSerialization.jsonObject(with: data) {
+      if let dict = object as? [String: Any], let samples = dict["samples"] as? [Any] {
+        rawArray = samples
+      } else if let array = object as? [Any] {
+        rawArray = array
+      } else {
+        return []
+      }
+    } else {
+      return []
+    }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return rawArray.compactMap { element -> T? in
+      guard let elementData = try? JSONSerialization.data(withJSONObject: element) else {
+        return nil
+      }
+      return try? decoder.decode(T.self, from: elementData)
     }
   }
 

@@ -9,6 +9,11 @@ struct BaselineProgressModel {
     let readyInputs: Int
     let requiredInputs: Int
     let ready: Bool
+    // Engineering blocker strings straight from metric_readiness.rs (e.g.
+    // "rr_intervals_ms: hrv_rr_interval_scale_unverified"). Surfaced here only
+    // so the journey mapping can detect an un-validated decode path; the card
+    // never renders these verbatim.
+    let blockerReasons: [String]
   }
 
   let hasReport: Bool
@@ -47,7 +52,8 @@ extension HealthDataStore {
         title: Self.baselineFamilyTitle(name),
         readyInputs: Self.intValue(row["ready_input_count"]) ?? 0,
         requiredInputs: Self.intValue(row["required_input_count"]) ?? 0,
-        ready: row["score_ready"] as? Bool ?? false
+        ready: row["score_ready"] as? Bool ?? false,
+        blockerReasons: (row["blocker_reasons"] as? [Any])?.compactMap { $0 as? String } ?? []
       )
     }
     return BaselineProgressModel(

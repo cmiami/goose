@@ -1,13 +1,9 @@
 import SwiftUI
 
 struct HomeTimelineSection: View {
-  let sleep: HealthMetricSnapshot
   let activity: HealthMetricSnapshot
-  let recovery: HealthMetricSnapshot
   let activities: [ActivityTimelineItem]
-  let openSleep: () -> Void
   let openActivity: () -> Void
-  let openRecovery: () -> Void
   @AppStorage(OnboardingStorage.unitSystem) private var unitSystemRaw = MoreProfileUnitSystem.imperial.rawValue
 
   var body: some View {
@@ -30,47 +26,12 @@ struct HomeTimelineSection: View {
     }
   }
 
+  // Only real captured activities surface here — each carries item.startedAt
+  // for a genuine timestamp. No sleep/recovery placeholder rows and no
+  // hardcoded clock times; when activities is empty the parent gates the whole
+  // section out, so an empty timeline stays honestly empty.
   private var timelineEntries: [HomeTimelineEntry] {
-    var entries = [
-      HomeTimelineEntry(
-        id: "sleep",
-        sortMinutes: 6 * 60 + 34,
-        time: "06:34",
-        title: "Sleep summary",
-        subtitle: summary(for: sleep),
-        systemImage: "moon.fill",
-        tint: sleep.tint,
-        action: .sleep
-      ),
-      HomeTimelineEntry(
-        id: "recovery",
-        sortMinutes: 17 * 60,
-        time: "17:00",
-        title: "Recovery update",
-        subtitle: summary(for: recovery),
-        systemImage: "battery.25",
-        tint: recovery.tint,
-        action: .recovery
-      ),
-    ]
-
-    if activities.isEmpty {
-      entries.append(
-        HomeTimelineEntry(
-          id: "activity-load",
-          sortMinutes: 12 * 60 + 30,
-          time: "12:30",
-          title: "Activity load",
-          subtitle: summary(for: activity),
-          systemImage: "arrow.triangle.2.circlepath",
-          tint: activity.tint,
-          action: .activity
-        )
-      )
-    } else {
-      entries.append(contentsOf: activities.map(activityEntry))
-    }
-    return entries.sorted { $0.sortMinutes > $1.sortMinutes }
+    activities.map(activityEntry).sorted { $0.sortMinutes > $1.sortMinutes }
   }
 
   private func activityEntry(_ item: ActivityTimelineItem) -> HomeTimelineEntry {
@@ -89,10 +50,6 @@ struct HomeTimelineSection: View {
     )
   }
 
-  private func summary(for snapshot: HealthMetricSnapshot) -> String {
-    "\(snapshot.displayValue) - \(snapshot.status.localizedHealthStatus)"
-  }
-
   private func activitySummary(for item: ActivityTimelineItem) -> String {
     var parts: [String] = []
     if let distanceMeters = item.distanceMeters, distanceMeters > 0 {
@@ -107,12 +64,8 @@ struct HomeTimelineSection: View {
 
   private func perform(_ action: HomeTimelineAction) {
     switch action {
-    case .sleep:
-      openSleep()
     case .activity:
       openActivity()
-    case .recovery:
-      openRecovery()
     }
   }
 
@@ -176,7 +129,7 @@ struct HomeTimelineSection: View {
 struct HomeTimelineEntry: Identifiable, Equatable {
   let id: String
   let sortMinutes: Int
-  let time: String
+  let time: String?
   let title: String
   let subtitle: String
   let systemImage: String
@@ -195,13 +148,11 @@ struct HomeTimelineEntry: Identifiable, Equatable {
 }
 
 enum HomeTimelineAction: Equatable {
-  case sleep
   case activity
-  case recovery
 }
 
 struct HomeTimelineRow: View, Equatable {
-  let time: String
+  let time: String?
   let title: String
   let subtitle: String
   let systemImage: String
@@ -235,11 +186,13 @@ struct HomeTimelineRow: View, Equatable {
 
             Spacer(minLength: 8)
 
-            Text(time)
-              .font(.caption.weight(.bold))
-              .foregroundStyle(.secondary)
-              .monospacedDigit()
-              .lineLimit(1)
+            if let time {
+              Text(time)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .lineLimit(1)
+            }
           }
 
           Text(subtitle)

@@ -10,6 +10,7 @@ enum OnboardingStep: Int, CaseIterable {
   case notifications
   case connect
   case profile
+  case whatHappensNext
 
   var title: String {
     switch self {
@@ -25,6 +26,8 @@ enum OnboardingStep: Int, CaseIterable {
       return "Connect your WHOOP (4.0 or 5.0)"
     case .profile:
       return "Personal details"
+    case .whatHappensNext:
+      return "What happens next"
     }
   }
 
@@ -113,6 +116,19 @@ enum OnboardingPermissionState {
     @unknown default:
       return false
     }
+  }
+
+  static func bluetoothDenied() -> Bool {
+    switch CBManager.authorization {
+    case .denied, .restricted:
+      return true
+    default:
+      return false
+    }
+  }
+
+  static func bluetoothAuthorized() -> Bool {
+    CBManager.authorization == .allowedAlways
   }
 
   static func notificationResolved() async -> Bool {

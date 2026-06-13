@@ -12,11 +12,27 @@ struct HomeDashboardView: View {
   @State private var cachedLandingSnapshots: [HealthMetricSnapshot] = []
   @State private var cachedCardioLoadDays: [CardioLoadDay] = []
   @State private var cachedHealthMonitorSnapshots: [HealthMetricSnapshot] = []
+  @State private var cachedJourneys: [MetricJourney] = []
+  @State private var cachedBaselineNights: BaselineNightCounts?
   @State private var bpmRefreshTask: Task<Void, Never>?
 
   var body: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 18) {
+        // Device/connection + the real SyncProgressRing anchor the screen for a
+        // low-data user, so they lead.
+        HomeDeviceStatusCard(
+          ble: model.ble,
+          onReconnect: { model.ble.reconnectRemembered() }
+        )
+
+        if !cachedJourneys.allSatisfy({ $0.state == .ready }) {
+          HomeBaselineProgressCard(
+            journeys: cachedJourneys,
+            isSyncing: model.ble.isHistoricalSyncing
+          )
+        }
+
         HomeDailyScoreCard(
           scores: scoreSnapshots,
           coachTip: CoachTipFactory.homeTip(healthStore: healthStore, appModel: model),
@@ -24,43 +40,40 @@ struct HomeDashboardView: View {
           openCoach: openCoach
         )
 
-        if !baselineProgress.allReady {
-          HomeBaselineProgressCard(progress: baselineProgress)
+        // Speculative tiles stay hidden until they carry real data, so an empty
+        // screen reads honestly empty instead of showing placeholder zeros.
+        if showStressEnergy {
+          HomeStressEnergySection(
+            stress: landingSnapshot(for: .stress),
+            energy: landingSnapshot(for: .energyBank),
+            openStress: { openHealth(.stress) }
+          )
         }
 
-        HomeStressEnergySection(
-          stress: landingSnapshot(for: .stress),
-          energy: landingSnapshot(for: .energyBank),
-          openStress: { openHealth(.stress) }
-        )
-
-        HomeCardioLoadWidget(
-          snapshot: landingSnapshot(for: .cardioLoad),
-          days: cachedCardioLoadDays
-        ) {
-          showingCardioLoadSheet = true
-          model.recordUIAction("health.sheet.opened", detail: "Cardio Load home widget")
+        if !cachedCardioLoadDays.isEmpty {
+          HomeCardioLoadWidget(
+            snapshot: landingSnapshot(for: .cardioLoad),
+            days: cachedCardioLoadDays
+          ) {
+            showingCardioLoadSheet = true
+            model.recordUIAction("health.sheet.opened", detail: "Cardio Load home widget")
+          }
         }
 
-        HomeHealthMonitorSection(
-          snapshots: cachedHealthMonitorSnapshots,
-          openSnapshot: openHealthMonitorSnapshot
-        )
+        if !cachedHealthMonitorSnapshots.isEmpty {
+          HomeHealthMonitorSection(
+            snapshots: cachedHealthMonitorSnapshots,
+            openSnapshot: openHealthMonitorSnapshot
+          )
+        }
 
-        HomeTimelineSection(
-          sleep: homeSnapshot(for: .sleep),
-          activity: homeSnapshot(for: .strain),
-          recovery: homeSnapshot(for: .recovery),
-          activities: model.homeActivityTimelineItems,
-          openSleep: { openHealth(.sleep) },
-          openActivity: { openHealth(.strain) },
-          openRecovery: { openHealth(.recovery) }
-        )
-
-        HomeDeviceStatusCard(
-          ble: model.ble,
-          onReconnect: { model.ble.reconnectRemembered() }
-        )
+        if !model.homeActivityTimelineItems.isEmpty {
+          HomeTimelineSection(
+            activity: homeSnapshot(for: .strain),
+            activities: model.homeActivityTimelineItems,
+            openActivity: { openHealth(.strain) }
+          )
+        }
 
         HomeToolsGrid(
           catalogReady: healthStore.catalogStatus.localizedCaseInsensitiveContains("loaded") && !healthStore.catalogStatus.localizedCaseInsensitiveContains("not loaded"),
@@ -122,6 +135,7 @@ struct HomeDashboardView: View {
       healthStore.refreshPacketInputsIfNeeded()
       model.refreshActivityTimeline(for: selectedDate)
       refreshSnapshots()
+      await refreshJourneys()
     }
     .onChange(of: selectedDate) { _, newValue in
       model.refreshActivityTimeline(for: newValue)
@@ -136,6 +150,11 @@ struct HomeDashboardView: View {
     }
     .onChange(of: healthStore.catalogStatus) { _, _ in
       refreshSnapshots()
+    }
+    .onChange(of: healthStore.packetInputStatus) { _, _ in
+      // Packet-input extraction also produces the readiness report and sleep
+      // score the journeys read from — re-pull the real night counts.
+      Task { await refreshJourneys() }
     }
     .sheet(isPresented: $showingScoreDatePicker) {
       ScoreDatePickerSheet(
@@ -186,8 +205,12 @@ struct HomeDashboardView: View {
     return state == "ready" || state == "connected"
   }
 
-  private var baselineProgress: BaselineProgressModel {
-    healthStore.baselineProgress()
+  private var showStressEnergy: Bool {
+    let stress = landingSnapshot(for: .stress)
+    let energy = landingSnapshot(for: .energyBank)
+    let stressHasValue = stress.source.kind != .unavailable && firstNumber(in: stress.displayValue) != nil
+    let energyHasValue = energy.source.kind != .unavailable && firstNumber(in: energy.displayValue) != nil
+    return stressHasValue && energyHasValue
   }
 
   private func refreshSnapshots() {
@@ -199,6 +222,33 @@ struct HomeDashboardView: View {
     )
     cachedCardioLoadDays = healthStore.cardioLoadWeeklyPoints()
     cachedHealthMonitorSnapshots = healthStore.healthMonitorSnapshots(allowLiveFallbacks: false)
+    rebuildJourneys()
+  }
+
+  // Rebuilds the journey rows from the cached night counts already read off the
+  // main actor (see refreshJourneys). The remaining reads (sleep score status,
+  // readiness report, cardio day count) are @MainActor state shaping with no
+  // bridge call, so this stays cheap on the main thread.
+  private func rebuildJourneys() {
+    guard let nights = cachedBaselineNights else {
+      return
+    }
+    cachedJourneys = healthStore.metricJourneys(
+      nightCounts: nights,
+      sleepNights: healthStore.sleepUsableNightCount(),
+      cardioDays: cachedCardioLoadDays.count,
+      readiness: healthStore.baselineProgress()
+    )
+  }
+
+  // The fold-history read is a synchronous bridge call; per the CLAUDE.md
+  // anti-pattern it runs off @MainActor (nonisolated static worker) and the
+  // result is assigned back on the main actor before rebuilding the rows.
+  private func refreshJourneys() async {
+    let databasePath = HealthDataStore.defaultDatabasePath()
+    let nights = await HealthDataStore.baselineNightCounts(databasePath: databasePath)
+    cachedBaselineNights = nights
+    rebuildJourneys()
   }
 
   private func landingSnapshot(for route: HealthRoute) -> HealthMetricSnapshot {
@@ -210,7 +260,11 @@ struct HomeDashboardView: View {
     guard route == .strain, snapshot.unit != "%" else {
       return snapshot
     }
-    let rawValue = firstNumber(in: snapshot.displayValue) ?? firstNumber(in: snapshot.value) ?? 0
+    // An empty strain stays empty — only convert to a percent when a real
+    // number exists; never synthesise "0%" out of a missing reading.
+    guard let rawValue = firstNumber(in: snapshot.displayValue) ?? firstNumber(in: snapshot.value) else {
+      return snapshot
+    }
     let percent = min(max(Int((rawValue / 21 * 100).rounded()), 0), 100)
     return HealthMetricSnapshot(
       id: snapshot.id,

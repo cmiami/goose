@@ -141,6 +141,7 @@ extension GooseAppModel {
 
     guard state == "ready" else {
       passiveActivityCaptureWorkItem?.cancel()
+      cancelDeviceStepCounterPolling()
       return
     }
     schedulePassiveActivityCapture(reason: "ble_ready")
@@ -150,6 +151,7 @@ extension GooseAppModel {
       ble.record(source: "ble.clock", title: "clock.auto_sync.triggered", body: "state=ready")
     }
     maybeScheduleMorningSleepSync()
+    scheduleDeviceStepCounterPolling(reason: "ble_ready")
   }
 
   func schedulePassiveActivityCapture(reason: String) {

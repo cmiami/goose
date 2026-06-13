@@ -321,6 +321,8 @@ pub const BRIDGE_METHODS: &[&str] = &[
     "store.gravity_rows_between",
     "store.insert_gravity2_batch",
     "store.insert_gravity_rows",
+    "store.insert_hr_rr_batch",
+    "store.insert_hrv_rmssd_batch",
     "sync.backfill_streams",
     "sync.mark_synced",
     "sync.rows_pending_upload",
@@ -2861,6 +2863,14 @@ fn handle_bridge_request_inner(request: BridgeRequest) -> BridgeResponse {
             .and_then(insert_gravity2_batch_bridge)
             .map(|value| bridge_ok(&request.request_id, value))
             .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
+        "store.insert_hr_rr_batch" => request_args::<InsertHrRrBatchArgs>(&request)
+            .and_then(insert_hr_rr_batch_bridge)
+            .map(|value| bridge_ok(&request.request_id, value))
+            .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
+        "store.insert_hrv_rmssd_batch" => request_args::<InsertHrvRmssdBatchArgs>(&request)
+            .and_then(insert_hrv_rmssd_batch_bridge)
+            .map(|value| bridge_ok(&request.request_id, value))
+            .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
         "sync.mark_synced" => request_args::<SyncMarkSyncedArgs>(&request)
             .and_then(sync_mark_synced_bridge)
             .map(|value| bridge_ok(&request.request_id, value))
@@ -3392,6 +3402,78 @@ fn imu_step_count_from_decoded_frames_bridge(
     let output = imu_step_count_v1(&input);
     serde_json::to_value(output)
         .map_err(|e| GooseError::message(format!("cannot serialize imu_step_count output: {e}")))
+}
+
+/// WHOOP 5 IMU sample rate (Hz) used to assign a per-sample timestamp to each
+/// K10 accelerometer reading. Matches the rate used by the upload-stream path.
+const K10_SAMPLE_RATE_HZ: f64 = 50.0;
+
+/// Read K10 accelerometer data from decoded_frames between start_ts and end_ts
+/// and return one (ts, x, y, z) gravity tuple per sample, converting LSB→g via
+/// IMU_LSB_PER_G. Each sample is timestamped from the frame's embedded
+/// timestamp_seconds plus its sample index at K10_SAMPLE_RATE_HZ. Frames that
+/// fail either CRC are skipped. This is the validated K10 path (commit 745fbbe);
+/// it does NOT touch the unvalidated v18/v24 historical gravity decode. When no
+/// K10 motion exists in the window the result is empty — callers must keep their
+/// honest-empty behavior (no fabricated rows).
+fn k10_gravity_rows_from_decoded_frames(
+    store: &GooseStore,
+    start_ts: f64,
+    end_ts: f64,
+) -> GooseResult<Vec<(f64, f64, f64, f64)>> {
+    let start_dt = chrono_from_unix(start_ts);
+    let end_dt = chrono_from_unix(end_ts);
+
+    let frames = store.decoded_frames_between(&start_dt, &end_dt)?;
+
+    let mut gravity_rows: Vec<(f64, f64, f64, f64)> = Vec::new();
+
+    for frame in &frames {
+        if !frame.header_crc_valid || !frame.payload_crc_valid {
+            continue;
+        }
+
+        let parsed: Option<ParsedPayload> =
+            serde_json::from_str(&frame.parsed_payload_json).unwrap_or(None);
+
+        if let Some(ParsedPayload::DataPacket {
+            body_summary: Some(DataPacketBodySummary::RawMotionK10 { axes, .. }),
+            timestamp_seconds,
+            ..
+        }) = parsed
+        {
+            let Some(ts_base) = timestamp_seconds.map(|s| s as f64) else {
+                continue;
+            };
+            let ax = axes
+                .iter()
+                .find(|a| a.name == "accelerometer_x")
+                .and_then(|a| a.full_samples.as_ref());
+            let ay = axes
+                .iter()
+                .find(|a| a.name == "accelerometer_y")
+                .and_then(|a| a.full_samples.as_ref());
+            let az = axes
+                .iter()
+                .find(|a| a.name == "accelerometer_z")
+                .and_then(|a| a.full_samples.as_ref());
+
+            if let (Some(xs), Some(ys), Some(zs)) = (ax, ay, az) {
+                let n = xs.len().min(ys.len()).min(zs.len());
+                for i in 0..n {
+                    let sample_ts = ts_base + i as f64 / K10_SAMPLE_RATE_HZ;
+                    gravity_rows.push((
+                        sample_ts,
+                        xs[i] as f64 / IMU_LSB_PER_G,
+                        ys[i] as f64 / IMU_LSB_PER_G,
+                        zs[i] as f64 / IMU_LSB_PER_G,
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(gravity_rows)
 }
 
 #[derive(Debug, Deserialize)]
@@ -4164,6 +4246,74 @@ fn sync_backfill_streams_bridge(args: SyncBackfillStreamsArgs) -> GooseResult<se
     }))
 }
 
+// All numeric fields below are non-optional: serde rejects a row whose value is
+// absent rather than coercing it to a default. The Swift caller must drop any
+// malformed sidecar row so absent readings stay absent.
+#[derive(Debug, Deserialize)]
+struct HrSampleRowArg {
+    ts: f64,
+    bpm: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RrRowArg {
+    ts: f64,
+    interval_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct InsertHrRrBatchArgs {
+    database_path: String,
+    device_id: String,
+    #[serde(default)]
+    hr_samples: Vec<HrSampleRowArg>,
+    #[serde(default)]
+    rr_intervals: Vec<RrRowArg>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HrvRmssdRowArg {
+    ts: f64,
+    rmssd_ms: f64,
+    rr_interval_count: i64,
+    source: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InsertHrvRmssdBatchArgs {
+    database_path: String,
+    device_id: String,
+    #[serde(default)]
+    samples: Vec<HrvRmssdRowArg>,
+}
+
+fn insert_hr_rr_batch_bridge(args: InsertHrRrBatchArgs) -> GooseResult<serde_json::Value> {
+    let store = open_bridge_store(&args.database_path)?;
+    let hr_samples: Vec<(f64, i64)> =
+        args.hr_samples.iter().map(|s| (s.ts, s.bpm)).collect();
+    let rr_intervals: Vec<(f64, i64)> =
+        args.rr_intervals.iter().map(|r| (r.ts, r.interval_ms)).collect();
+    let report: BackfillReport =
+        store.insert_hr_rr_batch(&args.device_id, &hr_samples, &rr_intervals)?;
+    Ok(json!({
+        "hr_inserted": report.hr_inserted,
+        "rr_inserted": report.rr_inserted,
+    }))
+}
+
+fn insert_hrv_rmssd_batch_bridge(
+    args: InsertHrvRmssdBatchArgs,
+) -> GooseResult<serde_json::Value> {
+    let store = open_bridge_store(&args.database_path)?;
+    let rows: Vec<(f64, f64, i64, String)> = args
+        .samples
+        .iter()
+        .map(|s| (s.ts, s.rmssd_ms, s.rr_interval_count, s.source.clone()))
+        .collect();
+    let inserted = store.insert_hrv_rmssd_batch(&args.device_id, &rows)?;
+    Ok(json!({ "inserted": inserted }))
+}
+
 // ---------------------------------------------------------------------------
 // Exercise detection bridge (exercise.detect_sessions / exercise.sessions_between)
 // ---------------------------------------------------------------------------
@@ -4223,8 +4373,31 @@ fn exercise_detect_sessions_bridge(
         height_cm: args.profile.height_cm,
         daily_hr_p10: args.profile.daily_hr_p10,
     };
+    // When the caller did not supply gravity rows (no server upload), source the
+    // motion gate from the validated K10-accelerometer decode over the HR sample
+    // time span. detect_exercise_sessions returns no sessions when motion/HR
+    // gates fail, so an empty K10 span stays an empty session list.
+    let mut gravity_rows: Vec<GravityRow> = args.gravity_rows.clone();
+    if gravity_rows.is_empty()
+        && let (Some(span_start), Some(span_end)) = (
+            hr.iter().map(|s| s.ts).reduce(f64::min),
+            hr.iter().map(|s| s.ts).reduce(f64::max),
+        )
+    {
+        let tuples = k10_gravity_rows_from_decoded_frames(&store, span_start, span_end)?;
+        gravity_rows = tuples
+            .into_iter()
+            .map(|(ts, x, y, z)| GravityRow {
+                device_id: args.device_id.clone(),
+                ts,
+                x,
+                y,
+                z,
+            })
+            .collect();
+    }
     let sessions =
-        crate::exercise_detection::detect_exercise_sessions(&hr, &args.gravity_rows, &profile);
+        crate::exercise_detection::detect_exercise_sessions(&hr, &gravity_rows, &profile);
     let mut warnings: Vec<String> = Vec::new();
 
     // Build rows and insert all sessions in a single transaction (PERF-03).
@@ -4466,8 +4639,16 @@ fn sleep_staging_bridge(args: SleepStagingBridgeArgs) -> GooseResult<serde_json:
     let store = open_bridge_store(&args.database_path)?;
     let gravity_rows: Vec<GravityRow> =
         store.gravity_rows_between(&args.device_id, args.sleep_start_ts, args.sleep_end_ts)?;
-    let tuples: Vec<(f64, f64, f64, f64)> =
+    let mut tuples: Vec<(f64, f64, f64, f64)> =
         gravity_rows.iter().map(|r| (r.ts, r.x, r.y, r.z)).collect();
+    // When the gravity table is empty (e.g. no server upload configured), fall
+    // back to the validated K10-accelerometer decode from stored frames. If both
+    // sources are empty, stage_sleep_four_class returns STAGING_METHOD_NO_IMU —
+    // no fabricated rows.
+    if tuples.is_empty() {
+        tuples =
+            k10_gravity_rows_from_decoded_frames(&store, args.sleep_start_ts, args.sleep_end_ts)?;
+    }
     let input = SleepStagingInput {
         device_id: args.device_id.clone(),
         sleep_start_ts: args.sleep_start_ts,
@@ -10655,6 +10836,299 @@ mod tests {
             result["sleep_efficiency_fraction"].is_number(),
             "sleep_efficiency_fraction must be present in the output"
         );
+    }
+
+    // ---- K10-gravity-from-decoded-frames fallback tests --------------------
+
+    /// Build a K10 raw-motion frame whose embedded timestamp is
+    /// `timestamp_seconds` and whose three accelerometer axes ramp linearly so
+    /// the resulting magnitude varies sample-to-sample (non-zero actigraphy
+    /// counts). The amplitude is scaled by `amplitude_lsb`.
+    fn k10_motion_frame_hex_for_test(timestamp_seconds: u32, amplitude_lsb: i16) -> String {
+        use crate::protocol::{PACKET_TYPE_REALTIME_RAW_DATA, build_v5_payload_frame};
+        let mut payload = vec![0u8; 1288];
+        payload[0] = PACKET_TYPE_REALTIME_RAW_DATA;
+        payload[1] = 10;
+        payload[17] = 72;
+        payload[7..11].copy_from_slice(&timestamp_seconds.to_le_bytes());
+        // accelerometer_x/y/z live at byte offsets 85 / 285 / 485, 100 i16
+        // samples each. Ramp them so each successive sample differs.
+        for (axis_index, offset) in [85usize, 285, 485].into_iter().enumerate() {
+            for index in 0..100 {
+                let sign = if (index + axis_index) % 2 == 0 { 1 } else { -1 };
+                let value = (sign * amplitude_lsb as i32) as i16;
+                payload[offset + index * 2..offset + index * 2 + 2]
+                    .copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        hex::encode(build_v5_payload_frame(&payload))
+    }
+
+    fn import_k10_frame(db_path: &str, evidence_id: &str, captured_at: &str, frame_hex: &str) {
+        let request = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: format!("import-{evidence_id}"),
+            method: "capture.import_frame_batch".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "parser_version": "goose-core/bridge-test",
+                "frames": [{
+                    "evidence_id": evidence_id,
+                    "frame_id": format!("{evidence_id}.frame.0"),
+                    "source": "ios.corebluetooth.notification",
+                    "captured_at": captured_at,
+                    "device_model": "WHOOP 5.0 Goose",
+                    "frame_hex": frame_hex,
+                    "sensitivity": "user-owned-capture",
+                    "device_type": "GOOSE"
+                }]
+            }),
+        };
+        let response = handle_bridge_request(request);
+        assert!(response.ok, "import must succeed: {:?}", response.error);
+    }
+
+    #[test]
+    fn k10_gravity_rows_from_decoded_frames_converts_lsb_to_g() {
+        let (_dir, db_path) = make_temp_db();
+        // Frame embedded timestamp and captured_at both at unix 1_700_000_010
+        // (2023-11-14T22:13:30Z), inside the [1_700_000_000, +600) window.
+        import_k10_frame(
+            &db_path,
+            "k10-grav-0",
+            "2023-11-14T22:13:30Z",
+            &k10_motion_frame_hex_for_test(1_700_000_010, 3900),
+        );
+        let store = crate::store::GooseStore::open(std::path::Path::new(&db_path)).unwrap();
+        let rows =
+            k10_gravity_rows_from_decoded_frames(&store, 1_700_000_000.0, 1_700_000_600.0).unwrap();
+        // 100 samples per axis → 100 gravity tuples for the single frame.
+        assert_eq!(rows.len(), 100, "expected one tuple per K10 sample");
+        // amplitude_lsb 3900 / IMU_LSB_PER_G(3900) = 1.0 g magnitude per axis.
+        for (_ts, x, y, z) in &rows {
+            assert!(
+                (x.abs() - 1.0).abs() < 1e-9
+                    && (y.abs() - 1.0).abs() < 1e-9
+                    && (z.abs() - 1.0).abs() < 1e-9,
+                "LSB→g conversion must divide by IMU_LSB_PER_G: ({x}, {y}, {z})"
+            );
+        }
+        // Per-sample timestamps must advance at K10_SAMPLE_RATE_HZ from the base.
+        assert!((rows[0].0 - 1_700_000_010.0).abs() < 1e-9);
+        assert!((rows[1].0 - (1_700_000_010.0 + 1.0 / K10_SAMPLE_RATE_HZ)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn k10_gravity_rows_from_decoded_frames_empty_window_is_empty() {
+        let (_dir, db_path) = make_temp_db();
+        let store = crate::store::GooseStore::open(std::path::Path::new(&db_path)).unwrap();
+        let rows =
+            k10_gravity_rows_from_decoded_frames(&store, 1_700_000_000.0, 1_700_000_600.0).unwrap();
+        assert!(rows.is_empty(), "no frames must yield no gravity rows");
+    }
+
+    #[test]
+    fn sleep_staging_from_decoded_k10_frames_returns_actigraphy() {
+        let (_dir, db_path) = make_temp_db();
+        let sleep_start = 1_700_000_000.0_f64;
+        let sleep_end = sleep_start + 8.0 * 3600.0;
+        // Two K10 frames whose embedded timestamps and captured_at both fall
+        // inside the sleep window, spread across two epochs.
+        import_k10_frame(
+            &db_path,
+            "k10-sleep-0",
+            "2023-11-14T22:13:50Z",
+            &k10_motion_frame_hex_for_test(sleep_start as u32 + 30, 6000),
+        );
+        import_k10_frame(
+            &db_path,
+            "k10-sleep-1",
+            "2023-11-14T22:18:50Z",
+            &k10_motion_frame_hex_for_test(sleep_start as u32 + 330, 6000),
+        );
+        let request = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "sleep-staging-k10".to_string(),
+            method: "metrics.sleep_staging".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "device_id": "dev-001",
+                "sleep_start_ts": sleep_start,
+                "sleep_end_ts": sleep_end
+            }),
+        };
+        let response = handle_bridge_request(request);
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.expect("result must be present");
+        assert_ne!(
+            result["staging_method"].as_str(),
+            Some("no_imu_data"),
+            "K10-derived gravity must drive actigraphy staging, not no_imu_data"
+        );
+        assert!(
+            result["epochs"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false),
+            "K10-derived gravity must produce non-empty epochs"
+        );
+    }
+
+    #[test]
+    fn sleep_staging_no_k10_frames_returns_no_imu_data() {
+        let (_dir, db_path) = make_temp_db();
+        let request = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "sleep-staging-no-k10".to_string(),
+            method: "metrics.sleep_staging".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "device_id": "dev-001",
+                "sleep_start_ts": 1_700_000_000.0_f64,
+                "sleep_end_ts": 1_700_028_800.0_f64
+            }),
+        };
+        let response = handle_bridge_request(request);
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.expect("result must be present");
+        assert_eq!(
+            result["staging_method"].as_str(),
+            Some("no_imu_data"),
+            "no gravity table rows and no K10 frames must stay honest-empty"
+        );
+        assert!(
+            result["epochs"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(false),
+            "epochs must be empty when no IMU source exists"
+        );
+    }
+
+    #[test]
+    fn exercise_detect_sessions_empty_motion_returns_no_sessions() {
+        let (_dir, db_path) = make_temp_db();
+        // Trusted HR above any plausible RHR margin, but no gravity table rows
+        // and no K10 frames → honest-empty session list (no fabricated session).
+        let mut hr_samples = Vec::new();
+        for i in 0..40 {
+            hr_samples.push(json!({"ts": 1_700_000_000.0_f64 + i as f64 * 30.0, "bpm": 150}));
+        }
+        let request = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "exercise-detect-empty-motion".to_string(),
+            method: "exercise.detect_sessions".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "device_id": "dev-001",
+                "hr_samples": hr_samples,
+                "gravity_rows": [],
+                "profile": {
+                    "resting_hr": 55.0,
+                    "max_hr": 190.0,
+                    "age": 30,
+                    "sex": "male",
+                    "weight_kg": 75.0,
+                    "height_cm": 180.0,
+                    "daily_hr_p10": 55.0
+                }
+            }),
+        };
+        let response = handle_bridge_request(request);
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.expect("result must be present");
+        assert_eq!(
+            result["sessions_detected"], 0,
+            "no motion gate evidence must yield zero sessions"
+        );
+        assert_eq!(result["sessions_inserted"], 0);
+    }
+
+    #[test]
+    fn store_insert_hrv_rmssd_batch_bridge_round_trip() {
+        let (_dir, db_path) = make_temp_db();
+        let request = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "insert-hrv-rmssd".to_string(),
+            method: "store.insert_hrv_rmssd_batch".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "device_id": "dev-1",
+                "samples": [
+                    {"ts": 6000.0, "rmssd_ms": 42.5, "rr_interval_count": 58, "source": "ble.hr.standard.rmssd_chunk"},
+                    {"ts": 6060.0, "rmssd_ms": 47.25, "rr_interval_count": 61, "source": "ble.hr.standard.rmssd_chunk"}
+                ]
+            }),
+        };
+        let response = handle_bridge_request(request);
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.expect("result must be present");
+        assert_eq!(result["inserted"], 2);
+        // Idempotent re-run inserts nothing.
+        let request2 = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "insert-hrv-rmssd-2".to_string(),
+            method: "store.insert_hrv_rmssd_batch".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "device_id": "dev-1",
+                "samples": [
+                    {"ts": 6000.0, "rmssd_ms": 42.5, "rr_interval_count": 58, "source": "ble.hr.standard.rmssd_chunk"}
+                ]
+            }),
+        };
+        let response2 = handle_bridge_request(request2);
+        assert!(response2.ok, "{:?}", response2.error);
+        assert_eq!(response2.result.unwrap()["inserted"], 0);
+    }
+
+    #[test]
+    fn store_insert_hrv_rmssd_batch_bridge_rejects_malformed_row() {
+        let (_dir, db_path) = make_temp_db();
+        // rr_interval_count missing → serde must reject the row (no coercion to 0).
+        let request = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "insert-hrv-rmssd-bad".to_string(),
+            method: "store.insert_hrv_rmssd_batch".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "device_id": "dev-1",
+                "samples": [
+                    {"ts": 7000.0, "rmssd_ms": 50.0, "source": "ble.hr.standard.rmssd_chunk"}
+                ]
+            }),
+        };
+        let response = handle_bridge_request(request);
+        assert!(
+            !response.ok,
+            "missing rr_interval_count must fail deserialization, not coerce to 0"
+        );
+    }
+
+    #[test]
+    fn store_insert_hr_rr_batch_bridge_round_trip() {
+        let (_dir, db_path) = make_temp_db();
+        let request = BridgeRequest {
+            schema: BRIDGE_REQUEST_SCHEMA.to_string(),
+            request_id: "insert-hr-rr".to_string(),
+            method: "store.insert_hr_rr_batch".to_string(),
+            args: json!({
+                "database_path": db_path,
+                "device_id": "dev-1",
+                "hr_samples": [
+                    {"ts": 1000.0, "bpm": 70},
+                    {"ts": 1001.0, "bpm": 71}
+                ],
+                "rr_intervals": [
+                    {"ts": 1000.0, "interval_ms": 850}
+                ]
+            }),
+        };
+        let response = handle_bridge_request(request);
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.expect("result must be present");
+        assert_eq!(result["hr_inserted"], 2);
+        assert_eq!(result["rr_inserted"], 1);
     }
 
     // ---- metric_series.query_range round-trip test -------------------------

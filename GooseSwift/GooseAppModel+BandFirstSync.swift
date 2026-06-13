@@ -69,4 +69,83 @@ extension GooseAppModel {
     request.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
     try? BGTaskScheduler.shared.submit(request)
   }
+
+  // Day-spread device step-counter polling (B5). Guarantees >=2 step-counter
+  // captures across the active day so the step_counter rollup can compute a
+  // monotonic-counter delta. Uses ONLY the trusted decoded_frames + step_discovery
+  // path — no protocol/byte-layout change. If no packet arrives, the rollup stays
+  // at insufficient_step_counter_samples (honest empty, never a fabricated sample).
+  static let deviceStepCounterPollInterval: TimeInterval = 3 * 60 * 60
+
+  // UserDefaults key for the last step-counter capture timestamp. Written BEFORE
+  // the BLE call to prevent retry loops on drop+reconnect (same pattern as
+  // lastHistorySyncAtKey above).
+  static let lastStepCounterCaptureAtKey = "goose.swift.lastStepCounterCaptureAt"
+
+  func scheduleDeviceStepCounterPolling(reason: String) {
+    guard ble.connectionState == "ready" else {
+      return
+    }
+    // Catch up immediately if the last capture is older than one interval (or has
+    // never run), so the day window starts collecting samples right away.
+    let lastCapture = UserDefaults.standard.object(forKey: Self.lastStepCounterCaptureAtKey) as? Date
+    if lastCapture == nil
+      || Date().timeIntervalSince(lastCapture ?? .distantPast) >= Self.deviceStepCounterPollInterval {
+      captureDeviceStepCounterSample(reason: reason)
+    }
+    stepCounterPollTimer?.cancel()
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(
+      deadline: .now() + Self.deviceStepCounterPollInterval,
+      repeating: Self.deviceStepCounterPollInterval,
+      leeway: .seconds(60)
+    )
+    timer.setEventHandler { [weak self] in
+      Task { @MainActor in
+        guard let self else {
+          return
+        }
+        guard self.ble.connectionState == "ready",
+              self.activeHealthPacketCapture == nil else {
+          return
+        }
+        self.captureDeviceStepCounterSample(reason: "periodic")
+      }
+    }
+    stepCounterPollTimer = timer
+    timer.resume()
+    ble.record(
+      source: "step_counter.poll",
+      title: "schedule.armed",
+      body: "reason=\(reason) interval=\(Int(Self.deviceStepCounterPollInterval.rounded()))s"
+    )
+  }
+
+  func captureDeviceStepCounterSample(reason: String) {
+    guard ble.connectionState == "ready" else {
+      return
+    }
+    // Write the watermark BEFORE the call so a drop+reconnect during capture does
+    // not spin into a retry loop (same ordering rule as triggerForegroundBLESync).
+    UserDefaults.standard.set(Date(), forKey: Self.lastStepCounterCaptureAtKey)
+    // Trusted path only: historical sync re-pulls the latest packets, which carry
+    // the monotonic step counter field decoded by step_discovery. Fall back to a
+    // short health-packet capture when historical sync is unavailable.
+    if ble.canSyncHistorical {
+      ble.record(source: "step_counter.poll", title: "capture.historical_sync", body: "reason=\(reason)")
+      ble.syncHistoricalPackets(rangeFirst: true)
+    } else {
+      ble.record(source: "step_counter.poll", title: "capture.health_packet", body: "reason=\(reason)")
+      startHealthPacketCapture(duration: 60, source: "auto.step_counter_poll")
+    }
+  }
+
+  func cancelDeviceStepCounterPolling() {
+    guard stepCounterPollTimer != nil else {
+      return
+    }
+    stepCounterPollTimer?.cancel()
+    stepCounterPollTimer = nil
+    ble.record(source: "step_counter.poll", title: "schedule.cancelled")
+  }
 }
