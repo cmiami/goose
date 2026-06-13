@@ -192,7 +192,9 @@
 		T10000000000000000000009 /* ClaudeProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000B /* ClaudeProviderTests.swift */; };
 		T1000000000000000000000A /* CustomEndpointProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000C /* CustomEndpointProviderTests.swift */; };
 		T1000000000000000000000B /* GeminiProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000D /* GeminiProviderTests.swift */; };
-/* End PBXBuildFile section */
+		T1000000000000000000000C /* TemperatureFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000E /* TemperatureFormattingTests.swift */; };
+		T1000000000000000000000D /* BaselineProgressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000F /* BaselineProgressTests.swift */; };
+	/* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		B70000000000000000000001 /* PBXContainerItemProxy */ = {
@@ -201,6 +203,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = B50000000000000000000001;
 			remoteInfo = GooseWorkoutLiveActivityExtension;
+		};
+		T70000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A70000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000001;
+			remoteInfo = GooseSwift;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -414,6 +423,8 @@
 		T2000000000000000000000B /* ClaudeProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeProviderTests.swift; sourceTree = "<group>"; };
 		T2000000000000000000000C /* CustomEndpointProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomEndpointProviderTests.swift; sourceTree = "<group>"; };
 		T2000000000000000000000D /* GeminiProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiProviderTests.swift; sourceTree = "<group>"; };
+		T2000000000000000000000E /* TemperatureFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureFormattingTests.swift; sourceTree = "<group>"; };
+		T2000000000000000000000F /* BaselineProgressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaselineProgressTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -706,8 +717,10 @@
 				T2000000000000000000000B /* ClaudeProviderTests.swift */,
 				T2000000000000000000000C /* CustomEndpointProviderTests.swift */,
 				T2000000000000000000000D /* GeminiProviderTests.swift */,
+				T2000000000000000000000E /* TemperatureFormattingTests.swift */,
+				T2000000000000000000000F /* BaselineProgressTests.swift */,
 				T20000000000000000000004 /* Info.plist */,
-			);
+				);
 			path = GooseSwiftTests;
 			sourceTree = "<group>";
 		};
@@ -761,6 +774,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				T70000000000000000000002 /* PBXTargetDependency */,
 			);
 			name = GooseSwiftTests;
 			productName = GooseSwiftTests;
@@ -1050,7 +1064,9 @@
 				T10000000000000000000009 /* ClaudeProviderTests.swift in Sources */,
 				T1000000000000000000000A /* CustomEndpointProviderTests.swift in Sources */,
 				T1000000000000000000000B /* GeminiProviderTests.swift in Sources */,
-			);
+				T1000000000000000000000C /* TemperatureFormattingTests.swift in Sources */,
+				T1000000000000000000000D /* BaselineProgressTests.swift in Sources */,
+				);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
@@ -1060,6 +1076,11 @@
 			isa = PBXTargetDependency;
 			target = B50000000000000000000001 /* GooseWorkoutLiveActivityExtension */;
 			targetProxy = B70000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		T70000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000001 /* GooseSwift */;
+			targetProxy = T70000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
