@@ -485,4 +485,42 @@ extension GooseBLEClient {
     DispatchQueue.main.asyncAfter(deadline: .now() + historicalManager.historicalRangeRetryDelay, execute: workItem)
   }
 
+  // Across-the-day automatic sync cadence. Armed on ready (after the first
+  // settle-delayed automatic sync), cancelled on disconnect / Bluetooth off.
+  // Each fire pulls the latest packets — which also feeds the day-spread
+  // step-counter rollup with fresh monotonic-counter samples.
+  func startPeriodicAutomaticSyncTimer() {
+    periodicSyncTimer?.cancel()
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(
+      deadline: .now() + Self.periodicAutomaticSyncInterval,
+      repeating: Self.periodicAutomaticSyncInterval,
+      leeway: .seconds(30)
+    )
+    timer.setEventHandler { [weak self] in
+      guard let self else {
+        return
+      }
+      guard self.connectionState == "ready",
+            !self.isHistoricalSyncing,
+            self.supportsHistoricalSync,
+            self.autoHistoricalSyncOnReady else {
+        return
+      }
+      self.beginHistoricalSync(trigger: "periodic", automatic: true)
+    }
+    periodicSyncTimer = timer
+    timer.resume()
+    record(source: "ble.sync", title: "historical_sync.periodic_timer.armed", body: "interval=\(Int(Self.periodicAutomaticSyncInterval.rounded()))s")
+  }
+
+  func stopPeriodicAutomaticSyncTimer() {
+    guard periodicSyncTimer != nil else {
+      return
+    }
+    periodicSyncTimer?.cancel()
+    periodicSyncTimer = nil
+    record(source: "ble.sync", title: "historical_sync.periodic_timer.cancelled")
+  }
+
 }
