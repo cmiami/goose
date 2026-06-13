@@ -139,7 +139,7 @@ struct HomeHealthMetricCard: View {
           .lineLimit(1)
           .minimumScaleFactor(0.65)
 
-        Label(snapshot.status.localizedHealthStatus, systemImage: statusImage)
+        Label(statusText, systemImage: statusImage)
           .font(.caption.weight(.bold))
           .foregroundStyle(statusColor)
           .lineLimit(1)
@@ -169,7 +169,32 @@ struct HomeHealthMetricCard: View {
     return !(value.isEmpty || value == "--" || value == "—")
   }
 
+  // An IN-DEVELOPMENT vital: the strap streams the raw signal but the decoder
+  // isn't validated yet (the status carries the engineering "unverified" marker,
+  // or already reads "in development"). This is NOT a waiting state — wearing the
+  // strap won't promote it — so it must not show the hourglass that implies
+  // "come back later". Only meaningful when there's no real reading to show.
+  private var isInDevelopment: Bool {
+    guard !hasMetricValue else {
+      return false
+    }
+    return snapshot.status.localizedCaseInsensitiveContains("unverified")
+      || snapshot.status.localizedCaseInsensitiveContains("development")
+  }
+
+  // Replaces an hourglass label with the honest in-development wording so the
+  // user isn't told to wait on a metric that can't arrive from more wear.
+  private var statusText: String {
+    if isInDevelopment {
+      return String(localized: "In development")
+    }
+    return snapshot.status.localizedHealthStatus
+  }
+
   private var statusImage: String {
+    if isInDevelopment {
+      return "wrench.and.screwdriver"
+    }
     if snapshot.status.localizedCaseInsensitiveContains("unavailable") {
       return "exclamationmark.circle.fill"
     }
@@ -177,6 +202,9 @@ struct HomeHealthMetricCard: View {
   }
 
   private var statusColor: Color {
+    if isInDevelopment {
+      return .purple
+    }
     if snapshot.status.localizedCaseInsensitiveContains("unavailable") {
       return snapshot.tint
     }

@@ -6,8 +6,9 @@ import UIKit
 // MARK: - BaselineNightCounts
 //
 // Real validated night counts read from the Rust EWMA fold-history. hasReport
-// is false whenever the bridge read fails — that renders as "Not streamed yet",
-// never as a fabricated 0-night "calibrating" reading.
+// is false whenever the bridge read fails — while the report is still loading a
+// family fails CLOSED to inDevelopment, never to a fabricated 0-night
+// "calibrating" reading.
 
 struct BaselineNightCounts {
   let hrvNights: Int
@@ -49,8 +50,8 @@ extension HealthDataStore {
         hasReport: true
       )
     } catch {
-      // No coercion that invents a reading — absence of report maps to
-      // notStreamed, not calibrating.
+      // No coercion that invents a reading — absence of report maps to the
+      // family's fail-closed state, not calibrating.
       return empty
     }
   }
@@ -94,7 +95,10 @@ extension HealthDataStore {
   }
 
   // The single mapping function. Every 0 here is a real observed count;
-  // absence-of-report maps to notStreamed/blocked, never a fabricated reading.
+  // absence-of-report fails closed to inDevelopment, never a fabricated reading.
+  // Each family lands in exactly one MetricJourneyCategory: dataGathering rows
+  // advance by wearing the strap, inDevelopment rows are blocked on a decoder we
+  // are still building (wearing won't help).
   func metricJourneys(
     nightCounts: BaselineNightCounts,
     sleepNights: (nights: Int, hasReport: Bool),
@@ -121,12 +125,11 @@ extension HealthDataStore {
   ) -> MetricJourneyState {
     switch family {
     case .sleep:
+      // Sleep is pure data-gathering: no report or zero nights means the user
+      // simply hasn't worn it to sleep yet. Wearing it tonight advances it.
       let ready = family.window.ready
-      if !sleepNights.hasReport {
-        return .notStreamed
-      }
-      if sleepNights.nights == 0 {
-        return .needsNight
+      if !sleepNights.hasReport || sleepNights.nights == 0 {
+        return .needsFirstNight
       }
       if sleepNights.nights >= ready {
         return .ready
@@ -136,19 +139,19 @@ extension HealthDataStore {
     case .recovery:
       // Recovery scoring (metrics.rs recovery_v0/v1) consumes hrv_rmssd_ms,
       // whose decode is extraction_ready:false (hrv_rr_interval_scale_unverified).
-      // So recovery cannot legitimately compute until that gate is validated —
-      // it stays blocked regardless of resting-HR baseline maturity. Fail closed
-      // while the readiness report is still loading.
+      // When that *_unverified blocker is present, recovery cannot compute no
+      // matter how many nights are worn — that is an in-development gate, NOT
+      // calibrating, so we never imply wearing the strap will help. Fail CLOSED
+      // to inDevelopment while the readiness report is still loading. Once the
+      // gate is genuinely clear, recovery is ordinary data-gathering against the
+      // resting-HR baseline maturity window.
       if !readiness.hasReport
         || familyHasUnverifiedExtractionBlocker("recovery", in: readiness) {
-        return .blockedNeedsSupport(reason: "recovery")
+        return .inDevelopment
       }
       let ready = family.window.ready
-      if !nightCounts.hasReport {
-        return .notStreamed
-      }
-      if nightCounts.restingNights == 0 {
-        return .needsNight
+      if !nightCounts.hasReport || nightCounts.restingNights == 0 {
+        return .needsFirstNight
       }
       if nightCounts.restingReady {
         return .ready
@@ -158,33 +161,27 @@ extension HealthDataStore {
     case .hrv:
       // CRITICAL GUARD: HRV depends on rr_intervals_ms whose decoder is
       // extraction_ready:false (hrv_rr_interval_scale_unverified in
-      // metric_readiness.rs, not validated against openwhoop_reference.rs). An
-      // un-validated decode path NEVER shows calibrating progress and never
-      // reads ready — it stays blocked regardless of night count. Fail CLOSED:
-      // until the readiness report has loaded and proves otherwise, treat HRV as
-      // blocked (the gate is a hardcoded invariant today, not data-dependent),
+      // metric_readiness.rs, not validated against openwhoop_reference.rs). The
+      // proprietary decode is unproven, so HRV is ALWAYS in development today —
+      // it never shows calibrating progress and never reads ready, regardless of
+      // night count. This is a hardcoded product invariant, not data-dependent,
       // so the EWMA night counts can never flash a transient "calibrating".
-      if !readiness.hasReport
-        || familyHasUnverifiedExtractionBlocker("hrv", in: readiness)
-        || familyHasUnverifiedExtractionBlocker("stress", in: readiness) {
-        return .blockedNeedsSupport(reason: "hrv")
-      }
-      let ready = family.window.ready
-      if !nightCounts.hasReport {
-        return .notStreamed
-      }
-      if nightCounts.hrvNights == 0 {
-        return .needsNight
-      }
-      if nightCounts.hrvReady {
-        return .ready
-      }
-      return .calibrating(have: nightCounts.hrvNights, need: ready)
+      return .inDevelopment
+
+    case .respiratory, .skinTemp, .spo2:
+      // Sensor decoders we are still building (respiratory_rate_semantics_unverified,
+      // skin_temp_delta_c, spo2 gates in metric_readiness.rs). Wearing the strap
+      // streams the raw signal but we cannot yet turn it into a trustworthy
+      // reading — honestly in development, never "collecting".
+      return .inDevelopment
 
     case .cardio:
+      // Cardio Load is data-gathering: it builds across a 28-day window. Before
+      // the first day lands there is nothing to calibrate against yet, so it
+      // reads as collecting rather than implying a missed night.
       let ready = family.window.ready
       if cardioDays == 0 {
-        return .needsNight
+        return .collecting("Builds over ~28 days")
       }
       if cardioDays >= ready {
         return .ready
