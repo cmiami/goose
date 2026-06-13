@@ -308,6 +308,14 @@ extension GooseAppModel {
 
   func handleHistoricalSyncProgress(_ progress: GooseHistoricalSyncProgress) {
     if progress.isTerminal && !progress.failed {
+      // Server-independent: ingest the locally-captured HR/HRV sidecar on every
+      // completed historical sync so the validated readings reach the store even
+      // for local-only users with no server URL/token. Idempotent via the stores'
+      // UNIQUE(device_id, ts) constraint, so a double-run is harmless.
+      ingestSidecarSamplesIntoDatabase()
+      // Kick the post-sync extraction directly so it does not depend on the
+      // AppShellView callback being armed or the app being foreground.
+      Task { await healthStore?.runPacketInputs() }
       onHistoricalSyncCompleted?()
     }
     guard respiratoryPacketWatchActive else {

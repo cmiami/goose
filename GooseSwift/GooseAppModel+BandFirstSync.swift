@@ -128,16 +128,12 @@ extension GooseAppModel {
     // Write the watermark BEFORE the call so a drop+reconnect during capture does
     // not spin into a retry loop (same ordering rule as triggerForegroundBLESync).
     UserDefaults.standard.set(Date(), forKey: Self.lastStepCounterCaptureAtKey)
-    // Trusted path only: historical sync re-pulls the latest packets, which carry
-    // the monotonic step counter field decoded by step_discovery. Fall back to a
-    // short health-packet capture when historical sync is unavailable.
-    if ble.canSyncHistorical {
-      ble.record(source: "step_counter.poll", title: "capture.historical_sync", body: "reason=\(reason)")
-      ble.syncHistoricalPackets(rangeFirst: true)
-    } else {
-      ble.record(source: "step_counter.poll", title: "capture.health_packet", body: "reason=\(reason)")
-      startHealthPacketCapture(duration: 60, source: "auto.step_counter_poll")
-    }
+    // Take a FRESH LIVE read: a brief live capture persists current-time decoded
+    // frames carrying the monotonic step counter, producing a NEW time-spread
+    // sample each poll. Historical sync re-pulls the SAME frames → the same
+    // counter value, which never reaches the rollup's >=2-sample minimum.
+    ble.record(source: "step_counter.poll", title: "capture.health_packet", body: "reason=\(reason)")
+    startHealthPacketCapture(duration: 60, source: "auto.step_counter_poll")
   }
 
   func cancelDeviceStepCounterPolling() {

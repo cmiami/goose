@@ -150,10 +150,6 @@ extension GooseAppModel {
     let bridge = GooseRustBridge()
     serverImportInProgress = true
 
-    // Ingest the locally-captured HR/HRV sidecar alongside the server pull so the
-    // validated sidecar readings reach the store regardless of server contents.
-    ingestSidecarSamplesIntoDatabase()
-
     Task.detached(priority: .utility) { [weak self] in
       guard let self else { return }
 
