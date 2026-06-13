@@ -318,6 +318,99 @@ struct OnboardingConnectStep: View {
   }
 }
 
+struct OnboardingWhatHappensNextStep: View {
+  let bluetoothAuthorized: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      Text("Here is how Goose gets to know you once you start wearing the strap.")
+        .font(.body)
+        .foregroundStyle(.secondary)
+
+      OnboardingGroupedSection {
+        OnboardingWhatHappensNextRow(
+          systemImage: "moon.stars.fill",
+          tint: .indigo,
+          timeframe: "Tonight",
+          detail: "Wear the strap to sleep. Goose reads sleep and recovery directly from the strap."
+        )
+        OnboardingDivider()
+        OnboardingWhatHappensNextRow(
+          systemImage: "sunrise.fill",
+          tint: .orange,
+          timeframe: "After your first night",
+          detail: "You'll see your first sleep and recovery scores. They use only that night, so treat them as a first look."
+        )
+        OnboardingDivider()
+        OnboardingWhatHappensNextRow(
+          systemImage: "calendar",
+          tint: .blue,
+          timeframe: "Over your first week (~7 nights)",
+          detail: "Goose learns your personal baselines. Scores shift as it gets to know you."
+        )
+        OnboardingDivider()
+        OnboardingWhatHappensNextRow(
+          systemImage: "checkmark.seal.fill",
+          tint: .green,
+          timeframe: "After about two weeks (~14 nights)",
+          detail: "Your baselines are established. Recovery, strain, and sleep scores are fully trusted."
+        )
+        OnboardingDivider()
+        OnboardingWhatHappensNextRow(
+          systemImage: "lock.fill",
+          tint: .gray,
+          timeframe: "Your data, your server",
+          detail: "Readings sync automatically to your personal server. Nothing is sent anywhere else."
+        )
+      }
+
+      if !bluetoothAuthorized {
+        OnboardingGroupedSection {
+          HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+              .font(.headline)
+              .foregroundStyle(.orange)
+              .frame(width: 36, height: 36)
+              .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Text("Bluetooth is off, so Goose can't read your strap yet. You can turn it on anytime in Settings.")
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+          }
+          .padding(16)
+        }
+      }
+    }
+  }
+}
+
+struct OnboardingWhatHappensNextRow: View {
+  let systemImage: String
+  let tint: Color
+  let timeframe: String
+  let detail: String
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 12) {
+      Image(systemName: systemImage)
+        .font(.headline)
+        .foregroundStyle(tint)
+        .frame(width: 36, height: 36)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      VStack(alignment: .leading, spacing: 4) {
+        Text(timeframe)
+          .font(.headline)
+          .foregroundStyle(.primary)
+        Text(detail)
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(16)
+  }
+}
+
 struct OnboardingStandardActionBar: View {
   let showBack: Bool
   let primaryTitle: String
