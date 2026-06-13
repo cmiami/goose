@@ -78,18 +78,26 @@ struct HomeScoreDial: View {
       ZStack {
         Circle()
           .stroke(snapshot.tint.opacity(0.14), lineWidth: 9)
-        Circle()
-          .trim(from: 0, to: progress)
-          .stroke(snapshot.tint, style: StrokeStyle(lineWidth: 9, lineCap: .round))
-          .rotationEffect(.degrees(-90))
+        // An empty/unavailable reading draws no colored arc — a missing score
+        // must read as a grey ring with "—", never as a 0% colored low score.
+        if hasValue {
+          Circle()
+            .trim(from: 0, to: progress)
+            .stroke(snapshot.tint, style: StrokeStyle(lineWidth: 9, lineCap: .round))
+            .rotationEffect(.degrees(-90))
 
-        Text(scoreText)
-          .font(.system(size: 24, weight: .bold, design: .rounded))
-          .monospacedDigit()
-          .foregroundStyle(.primary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.62)
-          .padding(8)
+          Text(scoreText)
+            .font(.system(size: 24, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.62)
+            .padding(8)
+        } else {
+          Text("—")
+            .font(.system(size: 24, weight: .bold, design: .rounded))
+            .foregroundStyle(.tertiary)
+        }
       }
       .frame(width: 88, height: 88)
 
@@ -107,6 +115,10 @@ struct HomeScoreDial: View {
     }
     .frame(maxWidth: .infinity)
     .accessibilityElement(children: .combine)
+  }
+
+  private var hasValue: Bool {
+    firstNumber(in: snapshot.displayValue) != nil && snapshot.source.kind != .unavailable
   }
 
   private var scoreText: String {
@@ -160,17 +172,24 @@ struct HomeStressEnergySection: View {
           ZStack {
             Circle()
               .stroke(stress.tint.opacity(0.14), lineWidth: 8)
-            Circle()
-              .trim(from: 0, to: stressProgress)
-              .stroke(stress.tint, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-              .rotationEffect(.degrees(-90))
-            VStack(spacing: 1) {
-              Text(stress.value)
+            // No colored arc when stress is unavailable — track only + "—".
+            if hasStressValue {
+              Circle()
+                .trim(from: 0, to: stressProgress)
+                .stroke(stress.tint, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+              VStack(spacing: 1) {
+                Text(stress.value)
+                  .font(.title3.bold())
+                Text(stress.status)
+                  .font(.caption2.weight(.bold))
+                  .foregroundStyle(.secondary)
+                  .lineLimit(1)
+              }
+            } else {
+              Text("—")
                 .font(.title3.bold())
-              Text(stress.status)
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .foregroundStyle(.tertiary)
             }
           }
           .frame(width: 76, height: 76)
@@ -184,8 +203,21 @@ struct HomeStressEnergySection: View {
       }
       .buttonStyle(.plain)
 
-      HomeEnergyBar(percent: Int(firstNumber(in: energy.displayValue) ?? 0), caption: energy.status)
+      HomeEnergyBar(percent: energyPercent, caption: energy.status)
     }
+  }
+
+  private var hasStressValue: Bool {
+    firstNumber(in: stress.displayValue) != nil && stress.source.kind != .unavailable
+  }
+
+  // nil when energy is unavailable or carries no real number — the bar then
+  // renders all-grey with "—", never a real-looking 0%.
+  private var energyPercent: Int? {
+    guard energy.source.kind != .unavailable else {
+      return nil
+    }
+    return firstNumber(in: energy.displayValue).map { Int($0) }
   }
 
   private var stressProgress: Double {
@@ -230,7 +262,7 @@ struct HomeStressStat: View {
 }
 
 struct HomeEnergyBar: View {
-  let percent: Int
+  let percent: Int?
   let caption: String
 
   var body: some View {
@@ -250,21 +282,33 @@ struct HomeEnergyBar: View {
       }
 
       VStack(alignment: .trailing, spacing: 2) {
-        Text("\(percent)%")
-          .font(.headline.bold())
-          .lineLimit(1)
-        Text(caption)
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
+        if let percent {
+          Text("\(percent)%")
+            .font(.headline.bold())
+            .lineLimit(1)
+          Text(caption)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        } else {
+          Text("—")
+            .font(.headline.bold())
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+          Text("No energy data")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
       }
     }
     .padding(14)
     .cardSurface(tint: .green)
   }
 
+  // 0 filled segments (all grey) when there is no real energy reading.
   private var filledSegments: Int {
-    Int((Double(percent) / 100 * 18).rounded())
+    percent.map { Int((Double($0) / 100 * 18).rounded()) } ?? 0
   }
 }
 
