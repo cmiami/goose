@@ -194,6 +194,8 @@
 		T1000000000000000000000B /* GeminiProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000D /* GeminiProviderTests.swift */; };
 		T1000000000000000000000C /* TemperatureFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000E /* TemperatureFormattingTests.swift */; };
 		T1000000000000000000000D /* BaselineProgressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T2000000000000000000000F /* BaselineProgressTests.swift */; };
+		T1000000000000000000000E /* HistoricalRangeParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000010 /* HistoricalRangeParsingTests.swift */; };
+		T1000000000000000000000F /* WorkoutLiveActivityAttributesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T20000000000000000000011 /* WorkoutLiveActivityAttributesTests.swift */; };
 	/* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -425,6 +427,8 @@
 		T2000000000000000000000D /* GeminiProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiProviderTests.swift; sourceTree = "<group>"; };
 		T2000000000000000000000E /* TemperatureFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureFormattingTests.swift; sourceTree = "<group>"; };
 		T2000000000000000000000F /* BaselineProgressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaselineProgressTests.swift; sourceTree = "<group>"; };
+		T20000000000000000000010 /* HistoricalRangeParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoricalRangeParsingTests.swift; sourceTree = "<group>"; };
+		T20000000000000000000011 /* WorkoutLiveActivityAttributesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutLiveActivityAttributesTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -719,6 +723,8 @@
 				T2000000000000000000000D /* GeminiProviderTests.swift */,
 				T2000000000000000000000E /* TemperatureFormattingTests.swift */,
 				T2000000000000000000000F /* BaselineProgressTests.swift */,
+				T20000000000000000000010 /* HistoricalRangeParsingTests.swift */,
+				T20000000000000000000011 /* WorkoutLiveActivityAttributesTests.swift */,
 				T20000000000000000000004 /* Info.plist */,
 				);
 			path = GooseSwiftTests;
@@ -1066,7 +1072,9 @@
 				T1000000000000000000000B /* GeminiProviderTests.swift in Sources */,
 				T1000000000000000000000C /* TemperatureFormattingTests.swift in Sources */,
 				T1000000000000000000000D /* BaselineProgressTests.swift in Sources */,
-				);
+				T1000000000000000000000E /* HistoricalRangeParsingTests.swift in Sources */,
+				T1000000000000000000000F /* WorkoutLiveActivityAttributesTests.swift in Sources */,
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
