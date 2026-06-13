@@ -11,15 +11,15 @@ use crate::{
     },
     metrics::{
         AlgorithmRunResult, GOOSE_HRV_V0_ID, GOOSE_HRV_V0_VERSION, HrvInput, HrvOutput,
-        RecoveryInput, RecoveryScoreOutput, SleepInput, SleepScoreOutput, StrainInput,
-        StrainScoreOutput, StressInput, StressScoreOutput, goose_hrv_v0, goose_recovery_v0,
-        goose_sleep_v0, goose_strain_v0, goose_stress_v0, heart_rate_dip_pct, hr_disturbance_count,
-        sol_from_hr, waso_from_hr,
+        MetricComponent, RecoveryInput, RecoveryScoreOutput, SleepInput, SleepScoreOutput,
+        StrainInput, StrainScoreOutput, StressInput, StressScoreOutput, goose_hrv_v0,
+        goose_recovery_v0, goose_sleep_v0, goose_strain_v0, goose_stress_v0, heart_rate_dip_pct,
+        hr_disturbance_count, sol_from_hr, waso_from_hr,
     },
     protocol::{
         DataPacketBodySummary, I16SeriesSummary, ParsedPayload, decode_hex_with_whitespace,
     },
-    store::{DecodedFrameRow, GooseStore, RrIntervalRow},
+    store::{DecodedFrameRow, GooseStore, HrvSampleRow, RrIntervalRow},
     validation_labels::{
         OFFICIAL_WHOOP_LABEL_POLICY, official_label_policy_issue_action,
         official_label_policy_issues,
@@ -1674,10 +1674,22 @@ pub fn run_hrv_feature_report_for_store(
     let report = run_hrv_feature_report(&decoded_rows, &correlation, start, end, options)?;
 
     // When no HRV data came from decoded_frames, fall back to the rr_intervals table.
-    // This covers simulator testing and fresh-install scenarios where HR/RR data
-    // was imported directly (store.insert_hr_rr_batch) without the BLE trust chain.
+    // This covers simulator testing and fresh-install scenarios where raw RR was
+    // imported directly via store.insert_hr_rr_batch without the BLE trust chain.
     if report.hrv_input.is_none()
         && let Ok(fallback) = hrv_report_from_rr_table(store, start, end, options)
+        && fallback.hrv_input.is_some()
+    {
+        return Ok(fallback);
+    }
+
+    // Third tier: when neither decoded_frames nor the rr_intervals table yields HRV,
+    // consume the trusted standard-GATT (0x2A37) RMSSD sidecar stored in hrv_samples.
+    // The sidecar carries a pre-computed RMSSD scalar + interval count, never raw RR,
+    // so this tier stores/consumes the scalar honestly and never fabricates an RR
+    // series to feed goose_hrv_v0.
+    if report.hrv_input.is_none()
+        && let Ok(fallback) = hrv_report_from_rmssd_samples(store, start, end, options)
         && fallback.hrv_input.is_some()
     {
         return Ok(fallback);
@@ -1766,6 +1778,156 @@ fn hrv_report_from_rr_table(
         score_result,
         baseline: None,
         daily: Vec::new(),
+        features: Vec::new(),
+        issues,
+        next_actions: Vec::new(),
+    })
+}
+
+/// Convert a Unix timestamp (seconds) to a "YYYY-MM-DD" UTC date string.
+/// Self-contained Gregorian calculation (inverse of iso8601_to_unix_approx);
+/// no external dependency.
+fn unix_to_date_string(ts: f64) -> String {
+    let days = (ts / 86400.0).floor() as i64;
+    // Civil-from-days algorithm (Howard Hinnant), epoch 1970-01-01.
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Build an HrvFeatureReport from the trusted standard-GATT RMSSD sidecar stored in
+/// hrv_samples, used only when neither decoded_frames nor the rr_intervals table
+/// yields HRV. The sidecar carries a pre-computed RMSSD scalar (with the count of
+/// RR intervals it was derived from), NOT raw RR. The report therefore takes its
+/// rmssd_ms DIRECTLY from the stored validated value and NEVER synthesizes an RR
+/// series to feed goose_hrv_v0. A distinct provenance marker
+/// ("ble_hr_standard_2a37_rmssd_chunk") records that the source is the sidecar.
+fn hrv_report_from_rmssd_samples(
+    store: &GooseStore,
+    start: &str,
+    end: &str,
+    options: HrvFeatureOptions,
+) -> GooseResult<HrvFeatureReport> {
+    let start_ts = iso8601_to_unix_approx(start).unwrap_or(0.0);
+    let end_ts = iso8601_to_unix_approx(end).unwrap_or(f64::MAX);
+    let rows: Vec<HrvSampleRow> = store.hrv_samples_between(start_ts, end_ts)?;
+
+    let mut issues = Vec::new();
+
+    // Aggregate stored RMSSD per calendar date — the values are already-computed
+    // scalars, so a daily feature is the daily mean of the validated RMSSD samples.
+    let mut by_date: BTreeMap<String, (f64, usize, i64)> = BTreeMap::new();
+    for row in &rows {
+        let date = unix_to_date_string(row.ts);
+        let entry = by_date.entry(date).or_insert((0.0, 0, 0));
+        entry.0 += row.rmssd_ms;
+        entry.1 += 1;
+        entry.2 += row.rr_interval_count;
+    }
+
+    let daily: Vec<HrvDayFeature> = by_date
+        .iter()
+        .map(|(date, (rmssd_sum, sample_count, rr_count))| HrvDayFeature {
+            date: date.clone(),
+            rmssd_ms: rmssd_sum / *sample_count as f64,
+            rr_interval_count: *rr_count as usize,
+            trusted_metric_input: true,
+            input_ids: vec!["hrv_samples_table".to_string()],
+        })
+        .collect();
+
+    // Report-level RMSSD is the mean of all sidecar RMSSD samples in the window —
+    // taken verbatim from the stored validated values, not recomputed from RR.
+    let hrv_input = if rows.is_empty() {
+        issues.push("not_enough_hrv_samples".to_string());
+        None
+    } else {
+        Some(HrvInput {
+            start_time: start.to_string(),
+            end_time: end.to_string(),
+            // Intentionally empty: the sidecar never carries raw RR. Fabricating an
+            // RR series from RMSSD is forbidden — the scalar is consumed directly.
+            rr_intervals_ms: Vec::new(),
+            input_ids: vec!["hrv_samples_table".to_string()],
+            rr_timestamps_s: None,
+            stage_segments: None,
+        })
+    };
+
+    let total_rr_count: i64 = rows.iter().map(|r| r.rr_interval_count).sum();
+    let score_result = hrv_input.as_ref().map(|input| {
+        let mean_rmssd_ms =
+            rows.iter().map(|r| r.rmssd_ms).sum::<f64>() / rows.len() as f64;
+        let interval_count = total_rr_count.max(0) as usize;
+        AlgorithmRunResult {
+            algorithm_id: GOOSE_HRV_V0_ID.to_string(),
+            algorithm_version: GOOSE_HRV_V0_VERSION.to_string(),
+            family: "hrv".to_string(),
+            start_time: input.start_time.clone(),
+            end_time: input.end_time.clone(),
+            output: Some(HrvOutput {
+                algorithm_id: GOOSE_HRV_V0_ID.to_string(),
+                algorithm_version: GOOSE_HRV_V0_VERSION.to_string(),
+                interval_count,
+                valid_interval_count: interval_count,
+                invalid_interval_count: 0,
+                // Only RMSSD is carried by the sidecar; the remaining time-domain
+                // statistics require raw RR and are therefore not available. They
+                // are left at 0.0 and flagged, never fabricated.
+                mean_nn_ms: 0.0,
+                rmssd_ms: mean_rmssd_ms,
+                sdnn_ms: 0.0,
+                pnn50_fraction: 0.0,
+                ectopic_filter_removal_fraction: 0.0,
+                window_tier_used: 3,
+                components: vec![MetricComponent {
+                    name: "rmssd".to_string(),
+                    value: mean_rmssd_ms,
+                    unit: "ms".to_string(),
+                }],
+            }),
+            quality_flags: vec!["sidecar_rmssd_only_no_raw_rr".to_string()],
+            errors: Vec::new(),
+            provenance: json!({
+                "input_ids": ["hrv_samples_table"],
+                "source_signal": "ble_hr_standard_2a37_rmssd_chunk",
+                "rmssd_basis": "stored_precomputed_sidecar_scalar",
+                "sample_count": rows.len(),
+                "rr_interval_count": total_rr_count,
+                "expected_values_policy": "stored-validated-standard-gatt-rmssd"
+            }),
+        }
+    });
+
+    Ok(HrvFeatureReport {
+        schema: HRV_FEATURE_REPORT_SCHEMA.to_string(),
+        generated_by: "goose-hrv-features".to_string(),
+        pass: issues.is_empty(),
+        require_trusted_evidence: false,
+        capture_correlation_pass: true,
+        start_time: start.to_string(),
+        end_time: end.to_string(),
+        candidate_frame_count: rows.len(),
+        feature_count: daily.len(),
+        trusted_feature_count: daily.len(),
+        rr_interval_count: total_rr_count.max(0) as usize,
+        trusted_rr_interval_count: total_rr_count.max(0) as usize,
+        min_rr_intervals_to_compute: options.min_rr_intervals_to_compute,
+        require_baseline: options.require_baseline,
+        baseline_min_days: options.baseline_min_days,
+        daily_count: daily.len(),
+        hrv_input,
+        score_result,
+        baseline: None,
+        daily,
         features: Vec::new(),
         issues,
         next_actions: Vec::new(),
@@ -6681,4 +6843,138 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
 
 fn clamp_fraction(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod hrv_sidecar_tests {
+    use super::*;
+
+    const START: &str = "2026-05-27T00:00:00Z";
+    const END: &str = "2026-05-28T00:00:00Z";
+    // 2026-05-27T04:00:00Z in unix seconds, inside [START, END).
+    const SAMPLE_TS: f64 = 1_779_854_400.0;
+
+    fn options() -> HrvFeatureOptions {
+        HrvFeatureOptions {
+            min_owned_captures_per_summary: 1,
+            require_trusted_evidence: false,
+            min_rr_intervals_to_compute: 2,
+            baseline_min_days: 3,
+            require_baseline: false,
+        }
+    }
+
+    fn make_store() -> GooseStore {
+        GooseStore::open_in_memory().expect("failed to open in-memory store")
+    }
+
+    #[test]
+    fn test_hrv_report_from_rmssd_samples_uses_stored_value() {
+        let store = make_store();
+        // Seed only the sidecar RMSSD scalar — no decoded_frames, no rr_intervals.
+        store
+            .insert_hrv_rmssd_batch(
+                "dev-1",
+                &[(
+                    SAMPLE_TS,
+                    42.5_f64,
+                    58_i64,
+                    "ble.hr.standard.rmssd_chunk".to_string(),
+                )],
+            )
+            .unwrap();
+
+        let report =
+            run_hrv_feature_report_for_store(&store, "test-db", START, END, options()).unwrap();
+
+        assert!(report.pass, "{:?}", report.issues);
+        let input = report.hrv_input.as_ref().expect("hrv_input must be present");
+        // The sidecar never carries raw RR — the report must not fabricate one.
+        assert!(
+            input.rr_intervals_ms.is_empty(),
+            "sidecar tier must not synthesize rr_intervals_ms"
+        );
+        assert_eq!(input.input_ids, vec!["hrv_samples_table".to_string()]);
+
+        let score = report.score_result.expect("score_result must be present");
+        let output = score.output.expect("output must be present");
+        // RMSSD must equal the stored value EXACTLY (not recomputed from RR).
+        assert_eq!(output.rmssd_ms, 42.5);
+        assert!(
+            score
+                .quality_flags
+                .iter()
+                .any(|flag| flag == "sidecar_rmssd_only_no_raw_rr")
+        );
+        assert_eq!(
+            score.provenance["source_signal"],
+            "ble_hr_standard_2a37_rmssd_chunk"
+        );
+        // Daily feature carries the stored scalar + count.
+        assert_eq!(report.daily_count, 1);
+        assert_eq!(report.daily[0].rmssd_ms, 42.5);
+        assert_eq!(report.daily[0].rr_interval_count, 58);
+        assert_eq!(report.daily[0].input_ids, vec!["hrv_samples_table".to_string()]);
+    }
+
+    #[test]
+    fn test_hrv_report_prefers_rr_table_over_rmssd_sidecar() {
+        let store = make_store();
+        // Both the raw RR table AND the sidecar are present. The raw-RR tier runs
+        // before the sidecar tier, so input_ids must be "rr_intervals_table".
+        // 24 RR values (>=20) so goose_hrv_v0 emits an output we can compare.
+        let rr: Vec<(f64, i64)> = (0..24)
+            .map(|i| (SAMPLE_TS + i as f64, if i % 2 == 0 { 800 } else { 810 }))
+            .collect();
+        store.insert_hr_rr_batch("dev-1", &[], &rr).unwrap();
+        store
+            .insert_hrv_rmssd_batch(
+                "dev-1",
+                &[(
+                    SAMPLE_TS,
+                    99.0_f64,
+                    60_i64,
+                    "ble.hr.standard.rmssd_chunk".to_string(),
+                )],
+            )
+            .unwrap();
+
+        let report =
+            run_hrv_feature_report_for_store(&store, "test-db", START, END, options()).unwrap();
+
+        let input = report.hrv_input.as_ref().expect("hrv_input must be present");
+        assert_eq!(
+            input.input_ids,
+            vec!["rr_intervals_table".to_string()],
+            "raw RR table tier must win over the sidecar tier"
+        );
+        // The raw-RR tier feeds goose_hrv_v0 with the real intervals, so the score
+        // RMSSD is NOT the sidecar's 99.0.
+        let score = report.score_result.expect("score_result must be present");
+        let output = score.output.expect("output must be present");
+        assert_ne!(output.rmssd_ms, 99.0);
+    }
+
+    #[test]
+    fn test_hrv_report_empty_when_no_source() {
+        let store = make_store();
+        // No decoded_frames, no rr_intervals, no hrv_samples → honest-empty.
+        let report =
+            run_hrv_feature_report_for_store(&store, "test-db", START, END, options()).unwrap();
+
+        assert!(
+            report.hrv_input.is_none(),
+            "no source must yield no hrv_input"
+        );
+        assert!(report.score_result.is_none());
+        assert!(!report.pass, "empty report must not pass");
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.contains("not_enough")),
+            "issues must contain a not-enough marker: {:?}",
+            report.issues
+        );
+    }
 }

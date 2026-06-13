@@ -684,6 +684,16 @@ pub struct RrIntervalRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HrvSampleRow {
+    pub device_id: String,
+    pub ts: f64,
+    pub rmssd_ms: f64,
+    pub rr_interval_count: i64,
+    pub source: String,
+    pub synced: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventRow {
     pub device_id: String,
     pub ts: f64,
@@ -709,6 +719,7 @@ const STREAM_ALLOWLIST: &[&str] = &[
     "gravity",
     "gravity2_samples",
     "hr_samples",
+    "hrv_samples",
     "resp_samples",
     "rr_intervals",
     "skin_temp_samples",
@@ -1709,6 +1720,20 @@ impl GooseStore {
             CREATE INDEX IF NOT EXISTS idx_rr_intervals_device_ts ON rr_intervals(device_id, ts);
             CREATE INDEX IF NOT EXISTS idx_rr_intervals_synced_ts ON rr_intervals(synced, ts);
 
+            CREATE TABLE IF NOT EXISTS hrv_samples (
+                device_id TEXT NOT NULL,
+                ts REAL NOT NULL,
+                rmssd_ms REAL NOT NULL,
+                rr_interval_count INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                synced INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                UNIQUE(device_id, ts)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_hrv_samples_device_ts ON hrv_samples(device_id, ts);
+            CREATE INDEX IF NOT EXISTS idx_hrv_samples_synced_ts ON hrv_samples(synced, ts);
+
             CREATE TABLE IF NOT EXISTS events (
                 device_id TEXT NOT NULL,
                 ts REAL NOT NULL,
@@ -1821,6 +1846,7 @@ impl GooseStore {
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (18);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (19);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (20);
+            INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (21);
             PRAGMA user_version = 20;
             "#,
         )?;
@@ -7580,6 +7606,67 @@ impl GooseStore {
         })
     }
 
+    /// Insert pre-extracted hr_samples and rr_intervals rows in a single transaction.
+    /// Uses INSERT OR IGNORE to be idempotent (UNIQUE(device_id, ts) prevents duplicates).
+    /// Inserted rows have synced=0 (default) so they surface in rows_pending_upload.
+    /// Caller supplies already-validated (ts, value) tuples — this method never
+    /// coerces a missing reading to a default; malformed rows must be dropped upstream.
+    pub fn insert_hr_rr_batch(
+        &self,
+        device_id: &str,
+        hr_samples: &[(f64, i64)],
+        rr_intervals: &[(f64, i64)],
+    ) -> GooseResult<BackfillReport> {
+        let device_id_owned = device_id.to_string();
+        self.immediate_transaction(|store| {
+            let mut hr_inserted = 0usize;
+            for (ts, bpm) in hr_samples {
+                hr_inserted += store.conn.execute(
+                    "INSERT OR IGNORE INTO hr_samples (device_id, ts, bpm) VALUES (?1, ?2, ?3)",
+                    params![device_id_owned, ts, bpm],
+                )?;
+            }
+            let mut rr_inserted = 0usize;
+            for (ts, interval_ms) in rr_intervals {
+                rr_inserted += store.conn.execute(
+                    "INSERT OR IGNORE INTO rr_intervals (device_id, ts, interval_ms) VALUES (?1, ?2, ?3)",
+                    params![device_id_owned, ts, interval_ms],
+                )?;
+            }
+            Ok(BackfillReport {
+                hr_inserted,
+                rr_inserted,
+                events_inserted: 0,
+                battery_inserted: 0,
+            })
+        })
+    }
+
+    /// Insert pre-computed HRV RMSSD sidecar rows in a single transaction.
+    /// Each tuple is (ts, rmssd_ms, rr_interval_count, source). The RMSSD is stored
+    /// verbatim as its own scalar stream — no raw RR series is fabricated from it.
+    /// Uses INSERT OR IGNORE for idempotence (UNIQUE(device_id, ts)). Returns the
+    /// number of rows actually inserted. Caller must drop malformed sidecar rows
+    /// upstream — absent rmssd/count must stay absent, never coerced to 0.
+    pub fn insert_hrv_rmssd_batch(
+        &self,
+        device_id: &str,
+        rows: &[(f64, f64, i64, String)],
+    ) -> GooseResult<usize> {
+        let device_id_owned = device_id.to_string();
+        self.immediate_transaction(|store| {
+            let mut inserted = 0usize;
+            for (ts, rmssd_ms, rr_interval_count, source) in rows {
+                inserted += store.conn.execute(
+                    "INSERT OR IGNORE INTO hrv_samples (device_id, ts, rmssd_ms, rr_interval_count, source) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![device_id_owned, ts, rmssd_ms, rr_interval_count, source],
+                )?;
+            }
+            Ok(inserted)
+        })
+    }
+
     /// Return all rr_intervals rows with ts in [start_ts, end_ts).
     pub fn rr_intervals_between(
         &self,
@@ -7597,6 +7684,31 @@ impl GooseStore {
                     ts: row.get(1)?,
                     interval_ms: row.get(2)?,
                     synced: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Return all hrv_samples rows with ts in [start_ts, end_ts), ordered by ts.
+    pub fn hrv_samples_between(
+        &self,
+        start_ts: f64,
+        end_ts: f64,
+    ) -> GooseResult<Vec<HrvSampleRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT device_id, ts, rmssd_ms, rr_interval_count, source, synced FROM hrv_samples \
+             WHERE ts >= ?1 AND ts < ?2 ORDER BY ts",
+        )?;
+        let rows = stmt
+            .query_map(params![start_ts, end_ts], |row| {
+                Ok(HrvSampleRow {
+                    device_id: row.get(0)?,
+                    ts: row.get(1)?,
+                    rmssd_ms: row.get(2)?,
+                    rr_interval_count: row.get(3)?,
+                    source: row.get(4)?,
+                    synced: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -9274,6 +9386,20 @@ mod sync_schema_tests {
     }
 
     #[test]
+    fn test_hrv_samples_table_exists() {
+        let store = make_store();
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='hrv_samples'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "hrv_samples table should exist");
+    }
+
+    #[test]
     fn test_events_table_exists() {
         let store = make_store();
         let count: i64 = store
@@ -9690,6 +9816,140 @@ mod sync_methods_tests {
             synced_flag, 1i64,
             "pre-captured row must be synced=1 after mark_synced_rows"
         );
+    }
+
+    #[test]
+    fn test_insert_hr_rr_batch_roundtrip() {
+        let store = make_store();
+        let hr_samples = vec![(1000.0_f64, 70_i64), (1001.0, 71), (1002.0, 72)];
+        let rr_intervals = vec![(1000.0_f64, 850_i64), (1000.85, 860)];
+        let report = store
+            .insert_hr_rr_batch("dev-1", &hr_samples, &rr_intervals)
+            .unwrap();
+        assert_eq!(report.hr_inserted, 3);
+        assert_eq!(report.rr_inserted, 2);
+        assert_eq!(report.events_inserted, 0);
+        assert_eq!(report.battery_inserted, 0);
+
+        let hr_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM hr_samples", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(hr_count, 3);
+        let rr_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM rr_intervals", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rr_count, 2);
+        // Inserted rows must default to synced=0 so they surface in rows_pending_upload.
+        let pending_hr: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM hr_samples WHERE synced=0", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(pending_hr, 3, "inserted rows must be synced=0");
+    }
+
+    #[test]
+    fn test_insert_hr_rr_batch_idempotent() {
+        let store = make_store();
+        let hr_samples = vec![(2000.0_f64, 80_i64)];
+        let rr_intervals = vec![(2000.0_f64, 800_i64)];
+        let r1 = store
+            .insert_hr_rr_batch("dev-1", &hr_samples, &rr_intervals)
+            .unwrap();
+        let r2 = store
+            .insert_hr_rr_batch("dev-1", &hr_samples, &rr_intervals)
+            .unwrap();
+        assert_eq!(r1.hr_inserted, 1);
+        assert_eq!(r1.rr_inserted, 1);
+        assert_eq!(
+            r2.hr_inserted, 0,
+            "second insert must be a no-op (UNIQUE(device_id, ts))"
+        );
+        assert_eq!(r2.rr_inserted, 0);
+        let hr_count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM hr_samples", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(hr_count, 1, "exactly one HR row after two batches");
+    }
+
+    #[test]
+    fn test_insert_hrv_rmssd_batch_roundtrip() {
+        let store = make_store();
+        let rows = vec![
+            (
+                3000.0_f64,
+                42.5_f64,
+                58_i64,
+                "ble.hr.standard.rmssd_chunk".to_string(),
+            ),
+            (
+                3060.0,
+                47.25,
+                61,
+                "ble.hr.standard.rmssd_chunk".to_string(),
+            ),
+        ];
+        let inserted = store.insert_hrv_rmssd_batch("dev-1", &rows).unwrap();
+        assert_eq!(inserted, 2);
+
+        let read = store.hrv_samples_between(2900.0, 3100.0).unwrap();
+        assert_eq!(read.len(), 2);
+        // The stored RMSSD/count/source must be preserved verbatim (no coercion).
+        assert_eq!(read[0].ts, 3000.0);
+        assert_eq!(read[0].rmssd_ms, 42.5);
+        assert_eq!(read[0].rr_interval_count, 58);
+        assert_eq!(read[0].source, "ble.hr.standard.rmssd_chunk");
+        assert_eq!(read[0].synced, 0);
+        assert_eq!(read[1].rmssd_ms, 47.25);
+        assert_eq!(read[1].rr_interval_count, 61);
+    }
+
+    #[test]
+    fn test_insert_hrv_rmssd_batch_idempotent() {
+        let store = make_store();
+        let rows = vec![(
+            4000.0_f64,
+            55.0_f64,
+            70_i64,
+            "ble.hr.standard.rmssd_chunk".to_string(),
+        )];
+        let first = store.insert_hrv_rmssd_batch("dev-1", &rows).unwrap();
+        let second = store.insert_hrv_rmssd_batch("dev-1", &rows).unwrap();
+        assert_eq!(first, 1);
+        assert_eq!(second, 0, "re-inserting the same ts must be a no-op");
+        let count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM hrv_samples", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "no duplicate hrv_samples row");
+    }
+
+    #[test]
+    fn test_hrv_samples_in_stream_allowlist() {
+        let store = make_store();
+        store
+            .insert_hrv_rmssd_batch(
+                "dev-1",
+                &[(
+                    5000.0,
+                    50.0,
+                    60,
+                    "ble.hr.standard.rmssd_chunk".to_string(),
+                )],
+            )
+            .unwrap();
+        // mark_synced_rows / rows_pending_upload must accept "hrv_samples".
+        let pending = store.rows_pending_upload("hrv_samples", 10).unwrap();
+        assert_eq!(pending.len(), 1, "hrv_samples must be in STREAM_ALLOWLIST");
+        let rowid = pending[0]["rowid"].as_i64().unwrap();
+        let affected = store.mark_synced_rows("hrv_samples", &[rowid]).unwrap();
+        assert_eq!(affected, 1);
+        let pruned = store.prune_synced_stream_rows("hrv_samples", 1e12).unwrap();
+        assert_eq!(pruned, 1, "synced hrv_samples row must be prunable");
     }
 }
 
