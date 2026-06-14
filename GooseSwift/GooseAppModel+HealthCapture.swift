@@ -316,11 +316,10 @@ extension GooseAppModel {
       // Server-independent too: backfill decoded frames into the sample tables and
       // run the rollup/prune retention cycle on every completed sync, so collection
       // and retention work with no server configured. Upload stays optional/gated.
+      // The packet-input extraction is launched by runLocalSyncCycle only after that
+      // serialized backfill/compaction work completes, so it sees the newly written
+      // sample tables instead of racing them.
       runLocalSyncCycle()
-      // Kick the post-sync extraction directly so it does not depend on the
-      // AppShellView callback being armed or the app being foreground.
-      Task { await healthStore?.runPacketInputs() }
-      onHistoricalSyncCompleted?()
     }
     guard respiratoryPacketWatchActive else {
       return

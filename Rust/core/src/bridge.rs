@@ -4238,6 +4238,10 @@ struct SyncRowsPendingUploadArgs {
     database_path: String,
     stream: String,
     limit: i64,
+    #[serde(default)]
+    since_ts: Option<f64>,
+    #[serde(default)]
+    device_id: Option<String>,
 }
 
 /// Populate hr_samples and rr_intervals from decoded_frames for the given device and time window.
@@ -4283,7 +4287,12 @@ fn sync_rows_pending_upload_bridge(
     args: SyncRowsPendingUploadArgs,
 ) -> GooseResult<serde_json::Value> {
     let store = open_bridge_store(&args.database_path)?;
-    let rows = store.rows_pending_upload(&args.stream, args.limit)?;
+    let rows = store.rows_pending_upload_filtered(
+        &args.stream,
+        args.limit,
+        args.since_ts,
+        args.device_id.as_deref(),
+    )?;
     Ok(json!({"rows": rows}))
 }
 

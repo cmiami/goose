@@ -7569,20 +7569,57 @@ impl GooseStore {
         stream: &str,
         limit: i64,
     ) -> GooseResult<Vec<serde_json::Value>> {
+        self.rows_pending_upload_filtered(stream, limit, None, None)
+    }
+
+    /// Return up to `limit` rows from a stream table where synced=0, ordered by ts.
+    /// Optional filters are applied before LIMIT so stale backlog from another device
+    /// or older upload cursor cannot starve the caller's current batch.
+    pub fn rows_pending_upload_filtered(
+        &self,
+        stream: &str,
+        limit: i64,
+        since_ts: Option<f64>,
+        device_id: Option<&str>,
+    ) -> GooseResult<Vec<serde_json::Value>> {
         if !STREAM_ALLOWLIST.contains(&stream) {
             return Err(GooseError::message(format!("unknown stream: {stream}")));
         }
         if limit <= 0 {
             return Err(GooseError::message("limit must be a positive integer"));
         }
-        let sql = format!("SELECT rowid, * FROM {stream} WHERE synced=0 ORDER BY ts LIMIT ?1");
+        if let Some(ts) = since_ts
+            && !ts.is_finite()
+        {
+            return Err(GooseError::message("since_ts must be finite"));
+        }
+        if let Some(id) = device_id {
+            validate_required("device_id", id)?;
+        }
+
+        let mut clauses = vec!["synced=0".to_string()];
+        let mut sql_params: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(ts) = since_ts {
+            sql_params.push(rusqlite::types::Value::Real(ts));
+            clauses.push(format!("ts >= ?{}", sql_params.len()));
+        }
+        if let Some(id) = device_id {
+            sql_params.push(rusqlite::types::Value::Text(id.to_string()));
+            clauses.push(format!("device_id = ?{}", sql_params.len()));
+        }
+        sql_params.push(rusqlite::types::Value::Integer(limit));
+        let limit_param = sql_params.len();
+        let sql = format!(
+            "SELECT rowid, * FROM {stream} WHERE {} ORDER BY ts LIMIT ?{limit_param}",
+            clauses.join(" AND ")
+        );
         let mut statement = self.conn.prepare(&sql)?;
         let col_names: Vec<String> = statement
             .column_names()
             .into_iter()
             .map(String::from)
             .collect();
-        let rows = statement.query_map(params![limit], |row| {
+        let rows = statement.query_map(params_from_iter(sql_params.iter()), |row| {
             let mut obj = serde_json::Map::new();
             for (i, name) in col_names.iter().enumerate() {
                 let val = match row.get_ref(i)? {
@@ -10008,6 +10045,47 @@ mod sync_methods_tests {
         }
         let rows = store.rows_pending_upload("hr_samples", 3).unwrap();
         assert_eq!(rows.len(), 3, "limit=3 should return exactly 3 rows");
+    }
+
+    #[test]
+    fn test_rows_pending_upload_filtered_applies_filters_before_limit() {
+        let store = make_store();
+        for i in 0..600i64 {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO hr_samples (device_id, ts, bpm, synced) VALUES ('old-device', ?1, 70, 0)",
+                    params![i as f64],
+                )
+                .unwrap();
+        }
+        for ts in [1_000.0, 1_001.0] {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO hr_samples (device_id, ts, bpm, synced) VALUES ('other-device', ?1, 75, 0)",
+                    params![ts],
+                )
+                .unwrap();
+        }
+        for ts in [1_000.0, 1_001.0, 1_002.0] {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO hr_samples (device_id, ts, bpm, synced) VALUES ('active-device', ?1, 80, 0)",
+                    params![ts],
+                )
+                .unwrap();
+        }
+
+        let rows = store
+            .rows_pending_upload_filtered("hr_samples", 2, Some(1_000.0), Some("active-device"))
+            .unwrap();
+
+        assert_eq!(rows.len(), 2, "limit applies after filters");
+        assert!(rows.iter().all(|row| row["device_id"] == "active-device"));
+        assert_eq!(rows[0]["ts"].as_f64(), Some(1_000.0));
+        assert_eq!(rows[1]["ts"].as_f64(), Some(1_001.0));
     }
 
     #[test]

@@ -379,52 +379,48 @@ final class GooseUploadService: @unchecked Sendable {
     }
   }
 
-  // Pre-capture rowIDs for all 8 upload streams BEFORE the HTTP request is sent.
+  // Pre-capture rowIDs for all upload streams BEFORE the HTTP request is sent.
   // Called once per upload cycle; the returned dictionary is passed to markStreamsSynced
   // only after the server confirms 2xx — eliminating the blind-marking race window.
   private func captureAllPendingRowIDs(deviceID: UUID, sinceTimestamp: Date) -> [String: [Int]] {
-    // Tables included in the upload payload and their device_id column presence.
-    // Streams without device_id apply only the ts filter (no cross-device risk for gravity/spo2/etc.
-    // because those rows are written by the same device session).
-    let streams: [(table: String, hasDeviceID: Bool)] = [
-      ("hr_samples", true),
-      ("rr_intervals", true),
-      ("events", true),
-      ("battery", true),
-      ("spo2_samples", false),
-      ("skin_temp_samples", false),
-      ("resp_samples", false),
-      ("gravity", false),
+    // Every uploaded stream is device-scoped in SQLite. The Rust bridge applies
+    // device_id and since_ts before LIMIT so stale rows from another device cannot
+    // starve the active device's pre-capture set.
+    let streams = [
+      "hr_samples",
+      "rr_intervals",
+      "events",
+      "battery",
+      "spo2_samples",
+      "skin_temp_samples",
+      "resp_samples",
+      "gravity",
     ]
     var result: [String: [Int]] = [:]
     let sinceTs = sinceTimestamp.timeIntervalSince1970
-    for entry in streams {
-      // CR-03: pass since_ts so the Rust query applies the timestamp filter before
-      // the limit. Without it, Rust returns the 500 oldest rows (all with synced=0,
-      // ordered by ts ASC) and the Swift-side ts filter below discards them all if
-      // they are below effectiveSince — leaving newer rows (indices 501+) uncaptured.
+    let deviceIDString = deviceID.uuidString
+    for stream in streams {
+      // CR-03: Rust applies since_ts and device_id before the limit. Swift keeps the
+      // same checks here as a boundary assertion before handing rowids to mark_synced.
       guard let pendingReport = try? rust.request(
         method: "sync.rows_pending_upload",
         args: [
           "database_path": databasePath,
-          "stream": entry.table,
+          "stream": stream,
           "since_ts": sinceTs,
+          "device_id": deviceIDString,
           "limit": 500, // limit=500 matches upload batch cap — intentional
         ]
       ) else {
-        result[entry.table] = []
+        result[stream] = []
         continue
       }
       let rows = pendingReport["rows"] as? [[String: Any]] ?? []
-      result[entry.table] = rows.compactMap { row in
+      result[stream] = rows.compactMap { row in
         guard let rowid = (row["rowid"] as? NSNumber)?.intValue ?? (row["rowid"] as? Int),
               let ts = (row["ts"] as? NSNumber)?.doubleValue ?? (row["ts"] as? Double),
               ts >= sinceTs else { return nil }
-        // Apply device_id filter for tables that carry a device_id column.
-        if entry.hasDeviceID {
-          guard let deviceIdStr = row["device_id"] as? String,
-                deviceIdStr == deviceID.uuidString else { return nil }
-        }
+        guard let rowDeviceID = row["device_id"] as? String, rowDeviceID == deviceIDString else { return nil }
         return rowid
       }
     }
@@ -504,14 +500,24 @@ final class GooseUploadService: @unchecked Sendable {
   // replay window. Synchronous FFI — must run off-main.
   private func runCompactionFFI(deviceID: UUID) {
     // require_synced must be true ONLY when uploads will actually run, so mirror the
-    // exact gates performUpload checks: upload enabled + a server URL + a token. If
-    // any is missing the rows will never reach synced=1, so they must be allowed to
-    // prune by age (otherwise they would accumulate forever). A bare serverURL is not
-    // enough — uploads can still be disabled or unauthenticated.
+    // exact gates performUpload checks: upload enabled + a server URL + a token. Missing
+    // config means rows will never reach synced=1, so they prune by age. A Keychain read
+    // failure is different: the app may be server-backed but unable to prove token state,
+    // so fail closed and skip compaction rather than pruning unsynced uploadable rows.
     let uploadEnabled = UserDefaults.standard.bool(forKey: RemoteServerStorage.uploadEnabled)
     let serverURL = UserDefaults.standard.string(forKey: RemoteServerStorage.serverURL) ?? ""
-    let hasToken = ((try? RemoteServerKeychain.loadToken()) ?? nil).map { !$0.isEmpty } ?? false
-    let willUpload = uploadEnabled && !serverURL.isEmpty && hasToken
+    let willUpload: Bool
+    if uploadEnabled && !serverURL.isEmpty {
+      do {
+        let token = try RemoteServerKeychain.loadToken()
+        willUpload = token?.isEmpty == false
+      } catch {
+        logger.error("sync.compact_streams skipped: token read failed: \(error)")
+        return
+      }
+    } else {
+      willUpload = false
+    }
     do {
       let report = try rust.request(
         method: "sync.compact_streams",

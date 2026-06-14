@@ -68,8 +68,27 @@ extension GooseAppModel {
   // store and retention stay current even with no server. Upload remains a separate,
   // optional add-on (triggerManualUpload / the "Sync pendente" button).
   func runLocalSyncCycle() {
-    guard let whoopID = ble.activeDeviceIdentifier else { return }
-    let sinceTimestamp = lastUploadAt ?? Date().addingTimeInterval(-7 * 24 * 3600)
+    runSerializedLocalSyncCycle {
+      Task { @MainActor [weak self] in
+        if let healthStore = self?.healthStore {
+          await healthStore.runPacketInputs()
+        } else {
+          self?.onHistoricalSyncCompleted?()
+        }
+      }
+    }
+  }
+
+  private func runSerializedLocalSyncCycle(completion: @escaping @Sendable () -> Void) {
+    guard let whoopID = ble.activeDeviceIdentifier else {
+      completion()
+      return
+    }
+    // Local backfill must not use upload watermarks. Upload state may be absent,
+    // newer than the device history, or blocked by APNS/network. The backfill path is
+    // idempotent via UNIQUE(device_id, ts), so replaying full local decoded history is
+    // the correct conservative source of truth for local-first sync.
+    let sinceTimestamp = Date(timeIntervalSince1970: 0)
     // Serialize on the historical-write queue so backfill runs AFTER this sync's
     // frame writes commit: completeHistoricalSync flushes those writes onto this same
     // serial queue asynchronously, so reading decoded_frames any earlier could miss
@@ -78,6 +97,7 @@ extension GooseAppModel {
     let service = uploadService
     ble.historicalWriteQueue.async {
       service.runBackfillAndCompactSync(deviceID: whoopID, sinceTimestamp: sinceTimestamp)
+      completion()
     }
   }
 

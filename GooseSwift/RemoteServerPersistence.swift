@@ -42,12 +42,15 @@ enum RemoteServerURLValidator {
 
 enum RemoteServerKeychainError: Error, LocalizedError {
   case saveFailed(OSStatus)
+  case loadFailed(OSStatus)
   case deleteFailed(OSStatus)
 
   var errorDescription: String? {
     switch self {
     case .saveFailed(let status):
       return "Failed to save token to Keychain: \(status)"
+    case .loadFailed(let status):
+      return "Failed to load token from Keychain: \(status)"
     case .deleteFailed(let status):
       return "Failed to delete token from Keychain: \(status)"
     }
@@ -84,7 +87,7 @@ enum RemoteServerKeychain {
       return nil
     }
     guard status == errSecSuccess else {
-      throw RemoteServerKeychainError.saveFailed(status)
+      throw RemoteServerKeychainError.loadFailed(status)
     }
     guard let data = result as? Data else {
       return nil
