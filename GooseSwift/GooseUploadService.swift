@@ -493,17 +493,25 @@ final class GooseUploadService: @unchecked Sendable {
       let hrInserted = (report["hr_inserted"] as? Int) ?? 0
       logger.debug("sync.backfill_streams: hr_inserted=\(hrInserted)")
     } catch {
-      logger.debug("sync.backfill_streams failed: \(error)")
+      // Surfaced at .error (not .debug): a silent backfill failure means new frames
+      // never reach the sample tables, so the failure must be visible in production logs.
+      logger.error("sync.backfill_streams failed: \(error)")
     }
   }
 
   // Sync-driven compaction: roll completed days into stream_daily_rollup + the
   // minute tier, write the gated-metric daily candidate, then prune raw past the
-  // replay window. require_synced is true only when a server is configured — a
-  // local-only user still prunes its rolled-up raw, while a server user keeps rows
-  // the server has not yet acknowledged. Synchronous FFI — must run off-main.
+  // replay window. Synchronous FFI — must run off-main.
   private func runCompactionFFI(deviceID: UUID) {
-    let serverConfigured = !(UserDefaults.standard.string(forKey: RemoteServerStorage.serverURL) ?? "").isEmpty
+    // require_synced must be true ONLY when uploads will actually run, so mirror the
+    // exact gates performUpload checks: upload enabled + a server URL + a token. If
+    // any is missing the rows will never reach synced=1, so they must be allowed to
+    // prune by age (otherwise they would accumulate forever). A bare serverURL is not
+    // enough — uploads can still be disabled or unauthenticated.
+    let uploadEnabled = UserDefaults.standard.bool(forKey: RemoteServerStorage.uploadEnabled)
+    let serverURL = UserDefaults.standard.string(forKey: RemoteServerStorage.serverURL) ?? ""
+    let hasToken = ((try? RemoteServerKeychain.loadToken()) ?? nil).map { !$0.isEmpty } ?? false
+    let willUpload = uploadEnabled && !serverURL.isEmpty && hasToken
     do {
       let report = try rust.request(
         method: "sync.compact_streams",
@@ -513,15 +521,25 @@ final class GooseUploadService: @unchecked Sendable {
           "now_ts": Date().timeIntervalSince1970,
           "retention_days": 14,
           "minute_retention_days": 90,
-          "require_synced": serverConfigured,
+          "require_synced": willUpload,
         ]
       )
       let pruned = (report["pruned_rows"] as? Int) ?? 0
       let rolled = (report["rolled_up_days"] as? Int) ?? 0
       logger.debug("sync.compact_streams: rolled_up_days=\(rolled) pruned_rows=\(pruned)")
     } catch {
-      logger.debug("sync.compact_streams failed: \(error)")
+      // .error: a failed compaction means retention never advances and the DB grows.
+      logger.error("sync.compact_streams failed: \(error)")
     }
+  }
+
+  // Synchronous backfill + compaction (no upload, no gate). For callers already on a
+  // background queue that must SERIALIZE this work after other writes — notably the
+  // historical-frame write queue, so backfill reads decoded_frames only after the
+  // sync's frame writes have committed. Blocks the calling queue; never call on main.
+  func runBackfillAndCompactSync(deviceID: UUID, sinceTimestamp: Date) {
+    runBackfillFFI(deviceID: deviceID, sinceTimestamp: sinceTimestamp)
+    runCompactionFFI(deviceID: deviceID)
   }
 
   // Local-first cycle: backfill + compaction with NO server / network / APNS gate.

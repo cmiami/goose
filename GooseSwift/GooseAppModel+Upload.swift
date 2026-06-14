@@ -70,7 +70,15 @@ extension GooseAppModel {
   func runLocalSyncCycle() {
     guard let whoopID = ble.activeDeviceIdentifier else { return }
     let sinceTimestamp = lastUploadAt ?? Date().addingTimeInterval(-7 * 24 * 3600)
-    uploadService.runBackfillAndCompact(deviceID: whoopID, sinceTimestamp: sinceTimestamp)
+    // Serialize on the historical-write queue so backfill runs AFTER this sync's
+    // frame writes commit: completeHistoricalSync flushes those writes onto this same
+    // serial queue asynchronously, so reading decoded_frames any earlier could miss
+    // the newest frames. (Backfill is idempotent, so a missed frame is only ever
+    // delayed to the next cycle — this removes even that lag.)
+    let service = uploadService
+    ble.historicalWriteQueue.async {
+      service.runBackfillAndCompactSync(deviceID: whoopID, sinceTimestamp: sinceTimestamp)
+    }
   }
 
   func triggerManualUpload() {
