@@ -4313,8 +4313,9 @@ fn sync_compact_streams_bridge(args: SyncCompactStreamsArgs) -> GooseResult<serd
         args.minute_retention_days,
         args.require_synced,
     )?;
-    serde_json::to_value(report)
-        .map_err(|error| GooseError::message(format!("compaction report serialize failed: {error}")))
+    serde_json::to_value(report).map_err(|error| {
+        GooseError::message(format!("compaction report serialize failed: {error}"))
+    })
 }
 
 // All numeric fields below are non-optional: serde rejects a row whose value is
