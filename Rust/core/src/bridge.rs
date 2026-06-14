@@ -324,6 +324,7 @@ pub const BRIDGE_METHODS: &[&str] = &[
     "store.insert_hr_rr_batch",
     "store.insert_hrv_rmssd_batch",
     "sync.backfill_streams",
+    "sync.compact_streams",
     "sync.mark_synced",
     "sync.rows_pending_upload",
     "timeline.from_decoded_frames",
@@ -2883,6 +2884,10 @@ fn handle_bridge_request_inner(request: BridgeRequest) -> BridgeResponse {
             .and_then(sync_backfill_streams_bridge)
             .map(|value| bridge_ok(&request.request_id, value))
             .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
+        "sync.compact_streams" => request_args::<SyncCompactStreamsArgs>(&request)
+            .and_then(sync_compact_streams_bridge)
+            .map(|value| bridge_ok(&request.request_id, value))
+            .unwrap_or_else(|error| bridge_error(&request.request_id, "method_error", error)),
         "storage.check" => request_args::<StorageCheckArgs>(&request)
             .and_then(storage_check_bridge)
             .map(|value| bridge_ok(&request.request_id, value))
@@ -4244,6 +4249,23 @@ struct SyncBackfillStreamsArgs {
     end_ts: f64,
 }
 
+fn default_retention_days() -> i64 {
+    14
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncCompactStreamsArgs {
+    database_path: String,
+    device_id: String,
+    now_ts: f64,
+    #[serde(default = "default_retention_days")]
+    retention_days: i64,
+    // Defaults to false: a local-only client (no server) prunes rolled-up raw past
+    // the window. A server-backed client passes true to keep unsynced raw.
+    #[serde(default)]
+    require_synced: bool,
+}
+
 fn sync_mark_synced_bridge(args: SyncMarkSyncedArgs) -> GooseResult<serde_json::Value> {
     let store = open_bridge_store(&args.database_path)?;
     let count = store.mark_synced_rows(&args.stream, &args.row_ids)?;
@@ -4273,6 +4295,18 @@ fn sync_backfill_streams_bridge(args: SyncBackfillStreamsArgs) -> GooseResult<se
         "sig_quality_inserted": report.sig_quality_inserted,
         "optical_inserted": report.optical_inserted,
     }))
+}
+
+fn sync_compact_streams_bridge(args: SyncCompactStreamsArgs) -> GooseResult<serde_json::Value> {
+    let store = open_bridge_store(&args.database_path)?;
+    let report = store.compact_streams(
+        &args.device_id,
+        args.now_ts,
+        args.retention_days,
+        args.require_synced,
+    )?;
+    serde_json::to_value(report)
+        .map_err(|error| GooseError::message(format!("compaction report serialize failed: {error}")))
 }
 
 // All numeric fields below are non-optional: serde rejects a row whose value is

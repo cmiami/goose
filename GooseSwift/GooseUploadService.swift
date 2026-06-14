@@ -499,6 +499,30 @@ final class GooseUploadService: @unchecked Sendable {
         logger.debug("sync.backfill_streams failed: \(error)")
       }
       await performUpload(deviceID: deviceID, deviceType: deviceType, sinceTimestamp: sinceTimestamp)
+
+      // Sync-driven compaction (after upload so synced rows are eligible to prune):
+      // roll each high-rate stream's completed days into stream_daily_rollup, then
+      // prune raw past the replay window. require_synced is true only when a server
+      // is configured — a local-only user still prunes its rolled-up raw, while a
+      // server user keeps rows the server has not yet acknowledged.
+      let serverConfigured = !(UserDefaults.standard.string(forKey: RemoteServerStorage.serverURL) ?? "").isEmpty
+      do {
+        let report = try rust.request(
+          method: "sync.compact_streams",
+          args: [
+            "database_path": databasePath,
+            "device_id": deviceID.uuidString,
+            "now_ts": Date().timeIntervalSince1970,
+            "retention_days": 14,
+            "require_synced": serverConfigured,
+          ]
+        )
+        let pruned = (report["pruned_rows"] as? Int) ?? 0
+        let rolled = (report["rolled_up_days"] as? Int) ?? 0
+        logger.debug("sync.compact_streams: rolled_up_days=\(rolled) pruned_rows=\(pruned)")
+      } catch {
+        logger.debug("sync.compact_streams failed: \(error)")
+      }
     }
   }
 

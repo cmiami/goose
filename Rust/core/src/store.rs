@@ -746,6 +746,26 @@ pub struct BackfillReport {
     pub optical_inserted: usize,
 }
 
+pub const STREAM_COMPACTION_REPORT_SCHEMA: &str = "goose.stream-compaction-report.v1";
+
+/// Per-stream outcome of one compaction pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamCompactionRow {
+    pub stream: String,
+    pub rolled_up_days: usize,
+    pub pruned_rows: usize,
+}
+
+/// Summary returned by compact_streams: how many day-rollups were (re)written and
+/// how many raw rows were pruned across the high-rate sample streams.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamCompactionReport {
+    pub schema: String,
+    pub rolled_up_days: usize,
+    pub pruned_rows: usize,
+    pub streams: Vec<StreamCompactionRow>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExerciseSessionRow {
     pub device_id: String,
@@ -1763,6 +1783,27 @@ impl GooseStore {
 
             CREATE INDEX IF NOT EXISTS idx_optical_samples_device_ts ON optical_samples(device_id, ts);
             CREATE INDEX IF NOT EXISTS idx_optical_samples_synced_ts ON optical_samples(synced, ts);
+
+            -- Per-day rollup of the high-rate sample streams (one row per
+            -- device/stream/day). Computed by compact_streams during sync BEFORE the
+            -- raw rows are pruned, so the daily envelope (count + min/max/mean of a
+            -- representative channel) survives indefinitely while raw is kept only for
+            -- a bounded replay window. This is the long-term tier — tiny and forever.
+            CREATE TABLE IF NOT EXISTS stream_daily_rollup (
+                device_id    TEXT NOT NULL,
+                stream       TEXT NOT NULL,
+                date         TEXT NOT NULL,        -- YYYY-MM-DD UTC
+                sample_count INTEGER NOT NULL,
+                min_value    REAL,
+                max_value    REAL,
+                mean_value   REAL,
+                created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                UNIQUE(device_id, stream, date)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_stream_daily_rollup_device_stream
+                ON stream_daily_rollup(device_id, stream, date);
 
             CREATE TABLE IF NOT EXISTS events (
                 device_id TEXT NOT NULL,
@@ -7873,6 +7914,92 @@ impl GooseStore {
         let count = self.conn.execute(&sql, params![older_than_ts])?;
         Ok(count)
     }
+
+    /// Sync-driven compaction (the wearable buffers, the phone syncs, raw is
+    /// transient): roll every high-rate sample stream's COMPLETE days into
+    /// stream_daily_rollup, then prune raw rows older than the replay window.
+    ///
+    /// Rollup runs BEFORE prune, so the daily envelope (count + min/max/mean of a
+    /// representative channel) always survives even as raw is dropped. `now_ts` is
+    /// supplied by the caller (the core has no clock). `retention_days` is the raw
+    /// replay window. `require_synced` is true when a server is configured — it keeps
+    /// raw the server has not acknowledged (synced=0) so nothing is lost in transit;
+    /// pass false for local-only users so their rolled-up raw still prunes. The prune
+    /// cutoff is clamped to the start of today, so an incomplete (not-yet-rolled-up)
+    /// day is never pruned. Idempotent: re-running re-derives the same rollup rows.
+    pub fn compact_streams(
+        &self,
+        device_id: &str,
+        now_ts: f64,
+        retention_days: i64,
+        require_synced: bool,
+    ) -> GooseResult<StreamCompactionReport> {
+        validate_required("device_id", device_id)?;
+        // (table, representative value column). Streams with no single scalar channel
+        // (gravity x/y/z) roll up sample_count only.
+        const COMPACTABLE: &[(&str, Option<&str>)] = &[
+            ("hr_samples", Some("bpm")),
+            ("rr_intervals", Some("interval_ms")),
+            ("spo2_samples", Some("red")),
+            ("skin_temp_samples", Some("raw")),
+            ("resp_samples", Some("raw")),
+            ("optical_samples", Some("value")),
+            ("gravity", None),
+        ];
+        let start_of_today = (now_ts / 86_400.0).floor() * 86_400.0;
+        // Never prune past the start of today — today's rows have not been rolled up.
+        let cutoff = (now_ts - (retention_days.max(0) as f64) * 86_400.0).min(start_of_today);
+        let device_id_owned = device_id.to_string();
+        self.immediate_transaction(|store| {
+            let mut report = StreamCompactionReport {
+                schema: STREAM_COMPACTION_REPORT_SCHEMA.to_string(),
+                rolled_up_days: 0,
+                pruned_rows: 0,
+                streams: Vec::new(),
+            };
+            for &(table, value_col) in COMPACTABLE {
+                let (min_e, max_e, mean_e) = match value_col {
+                    Some(c) => (format!("MIN({c})"), format!("MAX({c})"), format!("AVG({c})")),
+                    None => ("NULL".to_string(), "NULL".to_string(), "NULL".to_string()),
+                };
+                // Roll up every complete day (strictly before today) — idempotent upsert.
+                let rollup_sql = format!(
+                    "INSERT INTO stream_daily_rollup \
+                       (device_id, stream, date, sample_count, min_value, max_value, mean_value) \
+                     SELECT ?1, ?2, date(ts, 'unixepoch'), COUNT(*), {min_e}, {max_e}, {mean_e} \
+                     FROM {table} WHERE device_id = ?1 AND ts < ?3 \
+                     GROUP BY date(ts, 'unixepoch') \
+                     ON CONFLICT(device_id, stream, date) DO UPDATE SET \
+                       sample_count = excluded.sample_count, \
+                       min_value = excluded.min_value, \
+                       max_value = excluded.max_value, \
+                       mean_value = excluded.mean_value, \
+                       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+                );
+                let rolled = store
+                    .conn
+                    .execute(&rollup_sql, params![device_id_owned, table, start_of_today])?;
+                // Prune raw older than the window. Server users keep synced=0 rows so
+                // nothing is lost before the server acknowledges it.
+                let prune_sql = if require_synced {
+                    format!("DELETE FROM {table} WHERE device_id = ?1 AND ts < ?2 AND synced = 1")
+                } else {
+                    format!("DELETE FROM {table} WHERE device_id = ?1 AND ts < ?2")
+                };
+                let pruned = store
+                    .conn
+                    .execute(&prune_sql, params![device_id_owned, cutoff])?;
+                report.rolled_up_days += rolled;
+                report.pruned_rows += pruned;
+                report.streams.push(StreamCompactionRow {
+                    stream: table.to_string(),
+                    rolled_up_days: rolled,
+                    pruned_rows: pruned,
+                });
+            }
+            Ok(report)
+        })
+    }
 }
 
 fn finite_json_number(value: &Value) -> Option<f64> {
@@ -10197,6 +10324,108 @@ mod sync_methods_tests {
             )
             .unwrap();
         assert_eq!(v, 300);
+    }
+
+    fn insert_optical_row(store: &GooseStore, ts: f64, idx: i64, value: i64, synced: i64) {
+        store
+            .conn
+            .execute(
+                "INSERT INTO optical_samples (device_id, ts, sample_index, value, synced) \
+                 VALUES ('dev-1', ?1, ?2, ?3, ?4)",
+                params![ts, idx, value, synced],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_compact_streams_rolls_up_then_prunes_window() {
+        let store = make_store();
+        // now = day 100 at 01:00 UTC; today = [day100, day101).
+        let day = 86_400.0;
+        let now = 100.0 * day + 3600.0;
+        insert_optical_row(&store, 80.0 * day, 0, 10, 0); // old (outside 14d window)
+        insert_optical_row(&store, 90.0 * day, 0, 20, 0); // recent (inside window)
+        insert_optical_row(&store, 90.0 * day, 1, 30, 0); // recent, same day
+        insert_optical_row(&store, now, 0, 99, 0); // today (incomplete day)
+
+        let report = store
+            .compact_streams("dev-1", now, 14, false)
+            .unwrap();
+
+        // Two COMPLETE days rolled up for optical (day 80, day 90); today excluded.
+        let rollup_days: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM stream_daily_rollup WHERE stream='optical_samples'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rollup_days, 2, "day 80 and day 90 rolled up, today excluded");
+        // Day-90 envelope is exact (count=2, min=20, max=30, mean=25).
+        let (cnt, mn, mx, mean): (i64, f64, f64, f64) = store
+            .conn
+            .query_row(
+                "SELECT sample_count, min_value, max_value, mean_value FROM stream_daily_rollup \
+                 WHERE stream='optical_samples' AND date=date(?1,'unixepoch')",
+                params![90.0 * day],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((cnt, mn, mx, mean), (2, 20.0, 30.0, 25.0));
+
+        // Raw: day 80 pruned (outside window); day 90 + today kept (3 rows).
+        let remaining: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM optical_samples", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 3, "old day pruned; window + today retained");
+        assert!(report.pruned_rows >= 1 && report.rolled_up_days >= 2);
+
+        // Idempotent: rollup count stable, nothing new pruned.
+        let report2 = store.compact_streams("dev-1", now, 14, false).unwrap();
+        assert_eq!(report2.pruned_rows, 0, "second pass prunes nothing");
+        let rollup_days2: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM stream_daily_rollup WHERE stream='optical_samples'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rollup_days2, 2, "rollup is an idempotent upsert");
+    }
+
+    #[test]
+    fn test_compact_streams_require_synced_keeps_unacked_raw() {
+        let store = make_store();
+        let day = 86_400.0;
+        let now = 100.0 * day + 3600.0;
+        insert_optical_row(&store, 80.0 * day, 0, 10, 1); // old + synced
+        insert_optical_row(&store, 80.0 * day, 1, 11, 0); // old + NOT synced
+
+        // Server-backed user (require_synced=true): only the acknowledged row prunes;
+        // both are still rolled up first so no envelope is lost.
+        let report = store.compact_streams("dev-1", now, 14, true).unwrap();
+        assert_eq!(report.pruned_rows, 1, "only synced=1 raw pruned for server users");
+        let remaining: i64 = store
+            .conn
+            .query_row(
+                "SELECT synced FROM optical_samples WHERE device_id='dev-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0, "the unsynced row survives until the server acks it");
+        let cnt: i64 = store
+            .conn
+            .query_row(
+                "SELECT sample_count FROM stream_daily_rollup WHERE stream='optical_samples'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cnt, 2, "rollup captured both rows before pruning");
     }
 
     #[test]
