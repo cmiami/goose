@@ -313,6 +313,10 @@ extension GooseAppModel {
       // for local-only users with no server URL/token. Idempotent via the stores'
       // UNIQUE(device_id, ts) constraint, so a double-run is harmless.
       ingestSidecarSamplesIntoDatabase()
+      // Server-independent too: backfill decoded frames into the sample tables and
+      // run the rollup/prune retention cycle on every completed sync, so collection
+      // and retention work with no server configured. Upload stays optional/gated.
+      runLocalSyncCycle()
       // Kick the post-sync extraction directly so it does not depend on the
       // AppShellView callback being armed or the app being foreground.
       Task { await healthStore?.runPacketInputs() }

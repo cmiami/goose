@@ -475,55 +475,75 @@ final class GooseUploadService: @unchecked Sendable {
     }
   }
 
-  // Trigger manual backfill + upload of all pending streams.
-  // Called from the More tab "Sync pendente" button.
+  // Backfill decoded_frames -> sample tables (hr/rr/spo2/skin_temp/resp/optical/…).
+  // Synchronous FFI — must run off-main (callers dispatch to a detached task).
+  private func runBackfillFFI(deviceID: UUID, sinceTimestamp: Date) {
+    let end = Date().timeIntervalSince1970
+    let start = sinceTimestamp.timeIntervalSince1970
+    do {
+      let report = try rust.request(
+        method: "sync.backfill_streams",
+        args: [
+          "database_path": databasePath,
+          "device_id": deviceID.uuidString,
+          "start_ts": start,
+          "end_ts": end,
+        ]
+      )
+      let hrInserted = (report["hr_inserted"] as? Int) ?? 0
+      logger.debug("sync.backfill_streams: hr_inserted=\(hrInserted)")
+    } catch {
+      logger.debug("sync.backfill_streams failed: \(error)")
+    }
+  }
+
+  // Sync-driven compaction: roll completed days into stream_daily_rollup + the
+  // minute tier, write the gated-metric daily candidate, then prune raw past the
+  // replay window. require_synced is true only when a server is configured — a
+  // local-only user still prunes its rolled-up raw, while a server user keeps rows
+  // the server has not yet acknowledged. Synchronous FFI — must run off-main.
+  private func runCompactionFFI(deviceID: UUID) {
+    let serverConfigured = !(UserDefaults.standard.string(forKey: RemoteServerStorage.serverURL) ?? "").isEmpty
+    do {
+      let report = try rust.request(
+        method: "sync.compact_streams",
+        args: [
+          "database_path": databasePath,
+          "device_id": deviceID.uuidString,
+          "now_ts": Date().timeIntervalSince1970,
+          "retention_days": 14,
+          "minute_retention_days": 90,
+          "require_synced": serverConfigured,
+        ]
+      )
+      let pruned = (report["pruned_rows"] as? Int) ?? 0
+      let rolled = (report["rolled_up_days"] as? Int) ?? 0
+      logger.debug("sync.compact_streams: rolled_up_days=\(rolled) pruned_rows=\(pruned)")
+    } catch {
+      logger.debug("sync.compact_streams failed: \(error)")
+    }
+  }
+
+  // Local-first cycle: backfill + compaction with NO server / network / APNS gate.
+  // Runs on every completed historical sync so the on-device store and retention
+  // stay current even for a local-only user. Upload is a separate, optional add-on.
+  func runBackfillAndCompact(deviceID: UUID, sinceTimestamp: Date) {
+    Task.detached(priority: .utility) { [weak self] in
+      guard let self else { return }
+      runBackfillFFI(deviceID: deviceID, sinceTimestamp: sinceTimestamp)
+      runCompactionFFI(deviceID: deviceID)
+    }
+  }
+
+  // Manual backfill + UPLOAD + compaction. Called from the More tab "Sync pendente"
+  // button (the caller gates on server config + reachability). Compaction runs after
+  // upload so freshly-synced rows are eligible to prune this cycle.
   func triggerBackfill(deviceID: UUID, deviceType: String, sinceTimestamp: Date) {
     Task.detached(priority: .utility) { [weak self] in
       guard let self else { return }
-      // Call sync.backfill_streams to populate hr_samples/rr_intervals from decoded_frames.
-      let end = Date().timeIntervalSince1970
-      let start = sinceTimestamp.timeIntervalSince1970
-      do {
-        let report = try rust.request(
-          method: "sync.backfill_streams",
-          args: [
-            "database_path": databasePath,
-            "device_id": deviceID.uuidString,
-            "start_ts": start,
-            "end_ts": end,
-          ]
-        )
-        let hrInserted = (report["hr_inserted"] as? Int) ?? 0
-        logger.debug("sync.backfill_streams: hr_inserted=\(hrInserted)")
-      } catch {
-        logger.debug("sync.backfill_streams failed: \(error)")
-      }
+      runBackfillFFI(deviceID: deviceID, sinceTimestamp: sinceTimestamp)
       await performUpload(deviceID: deviceID, deviceType: deviceType, sinceTimestamp: sinceTimestamp)
-
-      // Sync-driven compaction (after upload so synced rows are eligible to prune):
-      // roll each high-rate stream's completed days into stream_daily_rollup, then
-      // prune raw past the replay window. require_synced is true only when a server
-      // is configured — a local-only user still prunes its rolled-up raw, while a
-      // server user keeps rows the server has not yet acknowledged.
-      let serverConfigured = !(UserDefaults.standard.string(forKey: RemoteServerStorage.serverURL) ?? "").isEmpty
-      do {
-        let report = try rust.request(
-          method: "sync.compact_streams",
-          args: [
-            "database_path": databasePath,
-            "device_id": deviceID.uuidString,
-            "now_ts": Date().timeIntervalSince1970,
-            "retention_days": 14,
-            "minute_retention_days": 90,
-            "require_synced": serverConfigured,
-          ]
-        )
-        let pruned = (report["pruned_rows"] as? Int) ?? 0
-        let rolled = (report["rolled_up_days"] as? Int) ?? 0
-        logger.debug("sync.compact_streams: rolled_up_days=\(rolled) pruned_rows=\(pruned)")
-      } catch {
-        logger.debug("sync.compact_streams failed: \(error)")
-      }
+      runCompactionFFI(deviceID: deviceID)
     }
   }
 

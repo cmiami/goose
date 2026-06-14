@@ -62,6 +62,17 @@ extension GooseAppModel {
     }
   }
 
+  // Local-first post-sync cycle: backfill decoded frames into the sample tables and
+  // run the rollup/prune retention cycle for EVERY user — no server URL, APNS token
+  // or network required. Invoked on every completed historical sync so the on-device
+  // store and retention stay current even with no server. Upload remains a separate,
+  // optional add-on (triggerManualUpload / the "Sync pendente" button).
+  func runLocalSyncCycle() {
+    guard let whoopID = ble.activeDeviceIdentifier else { return }
+    let sinceTimestamp = lastUploadAt ?? Date().addingTimeInterval(-7 * 24 * 3600)
+    uploadService.runBackfillAndCompact(deviceID: whoopID, sinceTimestamp: sinceTimestamp)
+  }
+
   func triggerManualUpload() {
     guard apnsDeviceToken != nil else {
       ble.record(level: .warn, source: "upload.gate", title: "skip.no_apns_token")
