@@ -4309,10 +4309,12 @@ struct InsertHrvRmssdBatchArgs {
 
 fn insert_hr_rr_batch_bridge(args: InsertHrRrBatchArgs) -> GooseResult<serde_json::Value> {
     let store = open_bridge_store(&args.database_path)?;
-    let hr_samples: Vec<(f64, i64)> =
-        args.hr_samples.iter().map(|s| (s.ts, s.bpm)).collect();
-    let rr_intervals: Vec<(f64, i64)> =
-        args.rr_intervals.iter().map(|r| (r.ts, r.interval_ms)).collect();
+    let hr_samples: Vec<(f64, i64)> = args.hr_samples.iter().map(|s| (s.ts, s.bpm)).collect();
+    let rr_intervals: Vec<(f64, i64)> = args
+        .rr_intervals
+        .iter()
+        .map(|r| (r.ts, r.interval_ms))
+        .collect();
     let report: BackfillReport =
         store.insert_hr_rr_batch(&args.device_id, &hr_samples, &rr_intervals)?;
     Ok(json!({
@@ -4321,9 +4323,7 @@ fn insert_hr_rr_batch_bridge(args: InsertHrRrBatchArgs) -> GooseResult<serde_jso
     }))
 }
 
-fn insert_hrv_rmssd_batch_bridge(
-    args: InsertHrvRmssdBatchArgs,
-) -> GooseResult<serde_json::Value> {
+fn insert_hrv_rmssd_batch_bridge(args: InsertHrvRmssdBatchArgs) -> GooseResult<serde_json::Value> {
     let store = open_bridge_store(&args.database_path)?;
     let rows: Vec<(f64, f64, i64, String)> = args
         .samples

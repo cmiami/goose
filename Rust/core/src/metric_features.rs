@@ -1835,13 +1835,15 @@ fn hrv_report_from_rmssd_samples(
 
     let daily: Vec<HrvDayFeature> = by_date
         .iter()
-        .map(|(date, (rmssd_sum, sample_count, rr_count))| HrvDayFeature {
-            date: date.clone(),
-            rmssd_ms: rmssd_sum / *sample_count as f64,
-            rr_interval_count: *rr_count as usize,
-            trusted_metric_input: true,
-            input_ids: vec!["hrv_samples_table".to_string()],
-        })
+        .map(
+            |(date, (rmssd_sum, sample_count, rr_count))| HrvDayFeature {
+                date: date.clone(),
+                rmssd_ms: rmssd_sum / *sample_count as f64,
+                rr_interval_count: *rr_count as usize,
+                trusted_metric_input: true,
+                input_ids: vec!["hrv_samples_table".to_string()],
+            },
+        )
         .collect();
 
     // Report-level RMSSD is the mean of all sidecar RMSSD samples in the window —
@@ -1864,8 +1866,7 @@ fn hrv_report_from_rmssd_samples(
 
     let total_rr_count: i64 = rows.iter().map(|r| r.rr_interval_count).sum();
     let score_result = hrv_input.as_ref().map(|input| {
-        let mean_rmssd_ms =
-            rows.iter().map(|r| r.rmssd_ms).sum::<f64>() / rows.len() as f64;
+        let mean_rmssd_ms = rows.iter().map(|r| r.rmssd_ms).sum::<f64>() / rows.len() as f64;
         let interval_count = total_rr_count.max(0) as usize;
         AlgorithmRunResult {
             algorithm_id: GOOSE_HRV_V0_ID.to_string(),
@@ -6888,7 +6889,10 @@ mod hrv_sidecar_tests {
             run_hrv_feature_report_for_store(&store, "test-db", START, END, options()).unwrap();
 
         assert!(report.pass, "{:?}", report.issues);
-        let input = report.hrv_input.as_ref().expect("hrv_input must be present");
+        let input = report
+            .hrv_input
+            .as_ref()
+            .expect("hrv_input must be present");
         // The sidecar never carries raw RR — the report must not fabricate one.
         assert!(
             input.rr_intervals_ms.is_empty(),
@@ -6914,7 +6918,10 @@ mod hrv_sidecar_tests {
         assert_eq!(report.daily_count, 1);
         assert_eq!(report.daily[0].rmssd_ms, 42.5);
         assert_eq!(report.daily[0].rr_interval_count, 58);
-        assert_eq!(report.daily[0].input_ids, vec!["hrv_samples_table".to_string()]);
+        assert_eq!(
+            report.daily[0].input_ids,
+            vec!["hrv_samples_table".to_string()]
+        );
     }
 
     #[test]
@@ -6942,7 +6949,10 @@ mod hrv_sidecar_tests {
         let report =
             run_hrv_feature_report_for_store(&store, "test-db", START, END, options()).unwrap();
 
-        let input = report.hrv_input.as_ref().expect("hrv_input must be present");
+        let input = report
+            .hrv_input
+            .as_ref()
+            .expect("hrv_input must be present");
         assert_eq!(
             input.input_ids,
             vec!["rr_intervals_table".to_string()],

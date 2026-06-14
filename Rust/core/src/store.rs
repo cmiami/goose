@@ -9891,12 +9891,7 @@ mod sync_methods_tests {
                 58_i64,
                 "ble.hr.standard.rmssd_chunk".to_string(),
             ),
-            (
-                3060.0,
-                47.25,
-                61,
-                "ble.hr.standard.rmssd_chunk".to_string(),
-            ),
+            (3060.0, 47.25, 61, "ble.hr.standard.rmssd_chunk".to_string()),
         ];
         let inserted = store.insert_hrv_rmssd_batch("dev-1", &rows).unwrap();
         assert_eq!(inserted, 2);
@@ -9939,12 +9934,7 @@ mod sync_methods_tests {
         store
             .insert_hrv_rmssd_batch(
                 "dev-1",
-                &[(
-                    5000.0,
-                    50.0,
-                    60,
-                    "ble.hr.standard.rmssd_chunk".to_string(),
-                )],
+                &[(5000.0, 50.0, 60, "ble.hr.standard.rmssd_chunk".to_string())],
             )
             .unwrap();
         // mark_synced_rows / rows_pending_upload must accept "hrv_samples".
