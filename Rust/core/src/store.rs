@@ -720,6 +720,7 @@ const STREAM_ALLOWLIST: &[&str] = &[
     "gravity2_samples",
     "hr_samples",
     "hrv_samples",
+    "optical_samples",
     "resp_samples",
     "rr_intervals",
     "skin_temp_samples",
@@ -739,6 +740,10 @@ pub struct BackfillReport {
     pub skin_temp_inserted: usize,
     #[serde(default)]
     pub resp_inserted: usize,
+    #[serde(default)]
+    pub sig_quality_inserted: usize,
+    #[serde(default)]
+    pub optical_inserted: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1739,6 +1744,24 @@ impl GooseStore {
 
             CREATE INDEX IF NOT EXISTS idx_hrv_samples_device_ts ON hrv_samples(device_id, ts);
             CREATE INDEX IF NOT EXISTS idx_hrv_samples_synced_ts ON hrv_samples(synced, ts);
+
+            -- Raw R17 optical (PPG) waveform samples, one row per i16 sample.
+            -- Collected verbatim (unscaled ADC counts) from R17OpticalOrLabradorFiltered
+            -- frames so the live optical waveform that feeds the unverified SpO2/HRV
+            -- decode accumulates a backlog for later validation. sample_index keeps the
+            -- intra-frame ordering since intra-frame sample timing is not known.
+            CREATE TABLE IF NOT EXISTS optical_samples (
+                device_id TEXT NOT NULL,
+                ts REAL NOT NULL,
+                sample_index INTEGER NOT NULL,
+                value INTEGER NOT NULL,
+                synced INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                UNIQUE(device_id, ts, sample_index)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_optical_samples_device_ts ON optical_samples(device_id, ts);
+            CREATE INDEX IF NOT EXISTS idx_optical_samples_synced_ts ON optical_samples(synced, ts);
 
             CREATE TABLE IF NOT EXISTS events (
                 device_id TEXT NOT NULL,
@@ -7540,6 +7563,10 @@ impl GooseStore {
         let mut spo2_rows: Vec<(f64, i64, i64)> = Vec::new(); // (ts, red, ir)
         let mut skin_temp_rows: Vec<(f64, i64)> = Vec::new(); // (ts, raw)
         let mut resp_rows: Vec<(f64, i64)> = Vec::new(); // (ts, raw)
+        let mut sig_quality_rows: Vec<(f64, i64)> = Vec::new(); // (ts, quality)
+        // Raw R17 optical waveform: one (ts, sample_index, value) per i16 sample. The
+        // live PPG that feeds the unverified SpO2/HRV decode — collected verbatim.
+        let mut optical_rows: Vec<(f64, i64, i64)> = Vec::new(); // (ts, sample_index, value)
 
         for frame in &frames {
             if !frame.header_crc_valid || !frame.payload_crc_valid {
@@ -7584,6 +7611,7 @@ impl GooseStore {
                     spo2_ir,
                     skin_temp_raw,
                     resp_raw,
+                    sig_quality,
                     ..
                 } => {
                     let contact = skin_contact.unwrap_or(0) == 1;
@@ -7610,6 +7638,26 @@ impl GooseStore {
                         if let (Some(ts), Some(raw)) = (ts_unix, *resp_raw) {
                             resp_rows.push((ts, raw as i64));
                         }
+                        // Signal-quality metadata travels with the optical reads; it
+                        // contextualises them during validation (e.g. dropping poor
+                        // samples), so collect it under the same contact gate.
+                        if let (Some(ts), Some(q)) = (ts_unix, *sig_quality) {
+                            sig_quality_rows.push((ts, q as i64));
+                        }
+                    }
+                }
+                DataPacketBodySummary::R17OpticalOrLabradorFiltered {
+                    samples: Some(series),
+                    ..
+                } => {
+                    // Real-time optical PPG waveform. Prefer the full sample array;
+                    // fall back to the preview when the parser only kept a preview.
+                    // Stored verbatim (unscaled i16 ADC); the decode stays unverified.
+                    if let Some(ts) = ts_unix {
+                        let values = series.full_samples.as_ref().unwrap_or(&series.preview);
+                        for (index, &value) in values.iter().enumerate() {
+                            optical_rows.push((ts, index as i64, value as i64));
+                        }
                     }
                 }
                 _ => {}
@@ -7621,6 +7669,8 @@ impl GooseStore {
         let spo2_to_insert = spo2_rows.clone();
         let skin_temp_to_insert = skin_temp_rows.clone();
         let resp_to_insert = resp_rows.clone();
+        let sig_quality_to_insert = sig_quality_rows.clone();
+        let optical_to_insert = optical_rows.clone();
         let device_id_owned = device_id.to_string();
 
         self.immediate_transaction(|store| {
@@ -7659,6 +7709,20 @@ impl GooseStore {
                     params![device_id_owned, ts, raw],
                 )?;
             }
+            let mut sig_quality_inserted = 0usize;
+            for (ts, quality) in &sig_quality_to_insert {
+                sig_quality_inserted += store.conn.execute(
+                    "INSERT OR IGNORE INTO sig_quality_samples (device_id, ts, quality, contact) VALUES (?1, ?2, ?3, 1)",
+                    params![device_id_owned, ts, quality],
+                )?;
+            }
+            let mut optical_inserted = 0usize;
+            for (ts, sample_index, value) in &optical_to_insert {
+                optical_inserted += store.conn.execute(
+                    "INSERT OR IGNORE INTO optical_samples (device_id, ts, sample_index, value) VALUES (?1, ?2, ?3, ?4)",
+                    params![device_id_owned, ts, sample_index, value],
+                )?;
+            }
             Ok(BackfillReport {
                 hr_inserted,
                 rr_inserted,
@@ -7667,6 +7731,8 @@ impl GooseStore {
                 spo2_inserted,
                 skin_temp_inserted,
                 resp_inserted,
+                sig_quality_inserted,
+                optical_inserted,
             })
         })
     }
@@ -7706,6 +7772,8 @@ impl GooseStore {
                 spo2_inserted: 0,
                 skin_temp_inserted: 0,
                 resp_inserted: 0,
+                sig_quality_inserted: 0,
+                optical_inserted: 0,
             })
         })
     }
@@ -9773,7 +9841,7 @@ mod sync_methods_tests {
             led1: None,
             led2: None,
             resp_raw: Some(512),
-            sig_quality: None,
+            sig_quality: Some(88),
             gravity2_x: None,
             gravity2_y: None,
             gravity2_z: None,
@@ -9819,6 +9887,7 @@ mod sync_methods_tests {
         assert_eq!(report.spo2_inserted, 1, "one spo2 candidate row collected");
         assert_eq!(report.skin_temp_inserted, 1, "one skin-temp candidate row");
         assert_eq!(report.resp_inserted, 1, "one resp candidate row collected");
+        assert_eq!(report.sig_quality_inserted, 1, "one sig-quality row collected");
 
         // Raw verbatim values must land in the sample tables (unscaled).
         let (red, ir): (i64, i64) = store
@@ -9839,6 +9908,15 @@ mod sync_methods_tests {
             )
             .unwrap();
         assert_eq!(skin, 4096, "raw skin-temp ADC stored verbatim");
+        let quality: i64 = store
+            .conn
+            .query_row(
+                "SELECT quality FROM sig_quality_samples WHERE device_id='dev-1' AND ts=3000.0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(quality, 88, "raw signal-quality stored verbatim");
 
         // Re-running is idempotent (INSERT OR IGNORE on UNIQUE(device_id, ts)).
         let report2 = store
@@ -9846,6 +9924,7 @@ mod sync_methods_tests {
             .unwrap();
         assert_eq!(report2.spo2_inserted, 0, "spo2 backfill is idempotent");
         assert_eq!(report2.resp_inserted, 0, "resp backfill is idempotent");
+        assert_eq!(report2.sig_quality_inserted, 0, "sig-quality is idempotent");
     }
 
     #[test]
@@ -9918,6 +9997,90 @@ mod sync_methods_tests {
         assert_eq!(report.spo2_inserted, 0, "no spo2 without skin contact");
         assert_eq!(report.skin_temp_inserted, 0, "no skin-temp without contact");
         assert_eq!(report.resp_inserted, 0, "no resp without skin contact");
+        assert_eq!(report.sig_quality_inserted, 0, "no sig-quality without contact");
+    }
+
+    #[test]
+    fn test_sync_backfill_collects_r17_optical_waveform() {
+        let store = make_store();
+        // R17 optical frame carrying a raw i16 PPG waveform. Build the payload via
+        // serde so field names match the deserializer exactly.
+        let evidence_id = "r17-evidence".to_string();
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO raw_evidence \
+             (evidence_id, source, captured_at, device_model, payload_hex, sha256, sensitivity) \
+             VALUES (?1, 'test', '1970-01-01T01:23:20.000Z', 'test-device', '', '', 'standard')",
+                params![evidence_id],
+            )
+            .unwrap();
+        let series = crate::protocol::I16SeriesSummary {
+            name: "r17_samples".to_string(),
+            offset: 26,
+            expected_count: 4,
+            parsed_count: 4,
+            min: Some(-30),
+            max: Some(40),
+            sum: 20,
+            preview: vec![10, -30, 40, 0],
+            full_samples: Some(vec![10, -30, 40, 0]),
+        };
+        let body = DataPacketBodySummary::R17OpticalOrLabradorFiltered {
+            flags: Some(0),
+            flag_bit_9: Some(false),
+            flag_bit_11: Some(false),
+            channels_or_gain: vec![1, 2],
+            sample_count: Some(4),
+            samples: Some(series),
+            warnings: vec![],
+        };
+        let payload = ParsedPayload::DataPacket {
+            packet_k: Some(17),
+            domain: None,
+            status_or_stream: None,
+            counter_or_page: None,
+            timestamp_seconds: Some(5000),
+            timestamp_subseconds: None,
+            hr_marker_offset: None,
+            hr_present_marker: None,
+            body_offset: 0,
+            body_hex: String::new(),
+            body_summary: Some(body),
+            warnings: vec![],
+        };
+        let payload_json = serde_json::to_string(&payload).unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO decoded_frames \
+             (frame_id, evidence_id, device_type, raw_len, header_len, declared_len, \
+              payload_hex, payload_crc_hex, header_crc_valid, payload_crc_valid, \
+              packet_type, packet_type_name, sequence, command_or_event, \
+              parsed_payload_json, parser_version, warnings_json) \
+             VALUES ('r17-frame', ?1, 'whoop5', 0, 0, 0, '', '', 1, 1, 17, 'REALTIME_DATA', 0, 0, ?2, 'test', '[]')",
+                params![evidence_id, payload_json],
+            )
+            .unwrap();
+        let report = store
+            .backfill_streams_from_decoded_frames("dev-1", 4900.0, 5100.0)
+            .unwrap();
+        assert_eq!(report.optical_inserted, 4, "all 4 optical samples collected");
+        // Verify a specific sample landed verbatim with its intra-frame index.
+        let value: i64 = store
+            .conn
+            .query_row(
+                "SELECT value FROM optical_samples WHERE device_id='dev-1' AND ts=5000.0 AND sample_index=2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, 40, "raw i16 optical sample stored verbatim");
+        // Idempotent re-run.
+        let report2 = store
+            .backfill_streams_from_decoded_frames("dev-1", 4900.0, 5100.0)
+            .unwrap();
+        assert_eq!(report2.optical_inserted, 0, "optical backfill is idempotent");
     }
 
     #[test]

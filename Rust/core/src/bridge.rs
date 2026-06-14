@@ -3688,9 +3688,13 @@ fn upload_get_recent_decoded_streams_bridge(
                             }
                         }
                         DataPacketBodySummary::R17OpticalOrLabradorFiltered { .. } => {
-                            // Optical/Labrador filtered — SpO2 raw ADC data
-                            // Raw interpretation requires calibration; skip for now
-                            // (historical V24 spo2 comes via a different packet type)
+                            // Optical/Labrador filtered raw PPG. Not pushed into the
+                            // red/IR spo2 upload stream here (different shape — a single
+                            // i16 waveform, not red/IR pairs, and the scale is
+                            // unverified). The raw waveform IS collected verbatim into
+                            // optical_samples by backfill_streams_from_decoded_frames,
+                            // so it accumulates for later validation rather than being
+                            // dropped.
                         }
                         DataPacketBodySummary::RawMotionK21 { .. } => {
                             // K21 gravity extraction is deferred: axis-to-physical mapping
@@ -4266,6 +4270,8 @@ fn sync_backfill_streams_bridge(args: SyncBackfillStreamsArgs) -> GooseResult<se
         "spo2_inserted": report.spo2_inserted,
         "skin_temp_inserted": report.skin_temp_inserted,
         "resp_inserted": report.resp_inserted,
+        "sig_quality_inserted": report.sig_quality_inserted,
+        "optical_inserted": report.optical_inserted,
     }))
 }
 
