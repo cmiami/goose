@@ -4253,6 +4253,10 @@ fn default_retention_days() -> i64 {
     14
 }
 
+fn default_minute_retention_days() -> i64 {
+    90
+}
+
 #[derive(Debug, Deserialize)]
 struct SyncCompactStreamsArgs {
     database_path: String,
@@ -4260,6 +4264,9 @@ struct SyncCompactStreamsArgs {
     now_ts: f64,
     #[serde(default = "default_retention_days")]
     retention_days: i64,
+    // Downsampled minute tier window (modeling/training resolution after full raw).
+    #[serde(default = "default_minute_retention_days")]
+    minute_retention_days: i64,
     // Defaults to false: a local-only client (no server) prunes rolled-up raw past
     // the window. A server-backed client passes true to keep unsynced raw.
     #[serde(default)]
@@ -4303,6 +4310,7 @@ fn sync_compact_streams_bridge(args: SyncCompactStreamsArgs) -> GooseResult<serd
         &args.device_id,
         args.now_ts,
         args.retention_days,
+        args.minute_retention_days,
         args.require_synced,
     )?;
     serde_json::to_value(report)

@@ -763,6 +763,12 @@ pub struct StreamCompactionReport {
     pub schema: String,
     pub rolled_up_days: usize,
     pub pruned_rows: usize,
+    #[serde(default)]
+    pub rolled_up_minutes: usize,
+    #[serde(default)]
+    pub pruned_minute_rows: usize,
+    #[serde(default)]
+    pub candidate_days: usize,
     pub streams: Vec<StreamCompactionRow>,
 }
 
@@ -1804,6 +1810,27 @@ impl GooseStore {
 
             CREATE INDEX IF NOT EXISTS idx_stream_daily_rollup_device_stream
                 ON stream_daily_rollup(device_id, stream, date);
+
+            -- Downsampled middle tier: per-minute rollup of the high-rate streams,
+            -- kept for a medium window (~90 days) so models can train on minute-level
+            -- features long after the full raw waveform has been pruned. This is the
+            -- "training/modeling" resolution; full raw lasts ~days, this lasts months,
+            -- the daily rollup lasts forever.
+            CREATE TABLE IF NOT EXISTS stream_minute_rollup (
+                device_id    TEXT NOT NULL,
+                stream       TEXT NOT NULL,
+                minute_ts    INTEGER NOT NULL,     -- unix seconds floored to the minute
+                sample_count INTEGER NOT NULL,
+                min_value    REAL,
+                max_value    REAL,
+                mean_value   REAL,
+                synced       INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                UNIQUE(device_id, stream, minute_ts)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_stream_minute_rollup_device_stream
+                ON stream_minute_rollup(device_id, stream, minute_ts);
 
             CREATE TABLE IF NOT EXISTS events (
                 device_id TEXT NOT NULL,
@@ -7932,6 +7959,7 @@ impl GooseStore {
         device_id: &str,
         now_ts: f64,
         retention_days: i64,
+        minute_retention_days: i64,
         require_synced: bool,
     ) -> GooseResult<StreamCompactionReport> {
         validate_required("device_id", device_id)?;
@@ -7949,12 +7977,16 @@ impl GooseStore {
         let start_of_today = (now_ts / 86_400.0).floor() * 86_400.0;
         // Never prune past the start of today — today's rows have not been rolled up.
         let cutoff = (now_ts - (retention_days.max(0) as f64) * 86_400.0).min(start_of_today);
+        let minute_cutoff = now_ts - (minute_retention_days.max(0) as f64) * 86_400.0;
         let device_id_owned = device_id.to_string();
         self.immediate_transaction(|store| {
             let mut report = StreamCompactionReport {
                 schema: STREAM_COMPACTION_REPORT_SCHEMA.to_string(),
                 rolled_up_days: 0,
                 pruned_rows: 0,
+                rolled_up_minutes: 0,
+                pruned_minute_rows: 0,
+                candidate_days: 0,
                 streams: Vec::new(),
             };
             for &(table, value_col) in COMPACTABLE {
@@ -7962,7 +7994,7 @@ impl GooseStore {
                     Some(c) => (format!("MIN({c})"), format!("MAX({c})"), format!("AVG({c})")),
                     None => ("NULL".to_string(), "NULL".to_string(), "NULL".to_string()),
                 };
-                // Roll up every complete day (strictly before today) — idempotent upsert.
+                // Daily tier — roll up every complete day (idempotent upsert), kept forever.
                 let rollup_sql = format!(
                     "INSERT INTO stream_daily_rollup \
                        (device_id, stream, date, sample_count, min_value, max_value, mean_value) \
@@ -7979,8 +8011,49 @@ impl GooseStore {
                 let rolled = store
                     .conn
                     .execute(&rollup_sql, params![device_id_owned, table, start_of_today])?;
-                // Prune raw older than the window. Server users keep synced=0 rows so
-                // nothing is lost before the server acknowledges it.
+
+                // Minute tier — downsampled features for the ~90-day modeling window.
+                // Re-derives only from raw still present (full raw is pruned to days),
+                // so its cost stays bounded; older minute rows persist until pruned.
+                let minute_sql = format!(
+                    "INSERT INTO stream_minute_rollup \
+                       (device_id, stream, minute_ts, sample_count, min_value, max_value, mean_value) \
+                     SELECT ?1, ?2, CAST(ts / 60 AS INTEGER) * 60, COUNT(*), {min_e}, {max_e}, {mean_e} \
+                     FROM {table} WHERE device_id = ?1 AND ts < ?3 \
+                     GROUP BY CAST(ts / 60 AS INTEGER) * 60 \
+                     ON CONFLICT(device_id, stream, minute_ts) DO UPDATE SET \
+                       sample_count = excluded.sample_count, \
+                       min_value = excluded.min_value, \
+                       max_value = excluded.max_value, \
+                       mean_value = excluded.mean_value"
+                );
+                let rolled_minutes = store
+                    .conn
+                    .execute(&minute_sql, params![device_id_owned, table, start_of_today])?;
+
+                // Gated-metric daily candidate (compute-then-prune): SpO2 is linear in
+                // the red/IR ratio (spo2 = a - b*r), so the daily MEAN ratio reconstructs
+                // the correct daily SpO2 under ANY future calibration. Stored before the
+                // raw is pruned so the multi-year trend survives even though the decoder
+                // is still unverified. Skin-temp/resp are reconstructable from the daily
+                // mean already in stream_daily_rollup (linear), so they need no extra row.
+                let mut candidate_days = 0usize;
+                if table == "spo2_samples" {
+                    candidate_days = store.conn.execute(
+                        "INSERT INTO metric_series (source, metric_name, date, value, updated_at) \
+                         SELECT 'goose.candidate.v0', 'spo2_red_ir_ratio_mean', \
+                                date(ts, 'unixepoch'), AVG(CAST(red AS REAL) / ir), \
+                                strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                         FROM spo2_samples WHERE device_id = ?1 AND ts < ?2 AND ir != 0 \
+                         GROUP BY date(ts, 'unixepoch') \
+                         ON CONFLICT(source, metric_name, date) DO UPDATE SET \
+                           value = excluded.value, updated_at = excluded.updated_at",
+                        params![device_id_owned, start_of_today],
+                    )?;
+                }
+
+                // Prune full raw older than the replay window. Server users keep synced=0
+                // rows so nothing is lost before the server acknowledges it.
                 let prune_sql = if require_synced {
                     format!("DELETE FROM {table} WHERE device_id = ?1 AND ts < ?2 AND synced = 1")
                 } else {
@@ -7989,7 +8062,10 @@ impl GooseStore {
                 let pruned = store
                     .conn
                     .execute(&prune_sql, params![device_id_owned, cutoff])?;
+
                 report.rolled_up_days += rolled;
+                report.rolled_up_minutes += rolled_minutes;
+                report.candidate_days += candidate_days;
                 report.pruned_rows += pruned;
                 report.streams.push(StreamCompactionRow {
                     stream: table.to_string(),
@@ -7997,6 +8073,13 @@ impl GooseStore {
                     pruned_rows: pruned,
                 });
             }
+
+            // Prune the minute tier past its (longer) window. It is a local downsampled
+            // cache, so age alone gates it — the daily tier already holds these days.
+            report.pruned_minute_rows = store.conn.execute(
+                "DELETE FROM stream_minute_rollup WHERE device_id = ?1 AND minute_ts < ?2",
+                params![device_id_owned, minute_cutoff],
+            )?;
             Ok(report)
         })
     }
@@ -10349,7 +10432,7 @@ mod sync_methods_tests {
         insert_optical_row(&store, now, 0, 99, 0); // today (incomplete day)
 
         let report = store
-            .compact_streams("dev-1", now, 14, false)
+            .compact_streams("dev-1", now, 14, 90, false)
             .unwrap();
 
         // Two COMPLETE days rolled up for optical (day 80, day 90); today excluded.
@@ -10383,7 +10466,7 @@ mod sync_methods_tests {
         assert!(report.pruned_rows >= 1 && report.rolled_up_days >= 2);
 
         // Idempotent: rollup count stable, nothing new pruned.
-        let report2 = store.compact_streams("dev-1", now, 14, false).unwrap();
+        let report2 = store.compact_streams("dev-1", now, 14, 90, false).unwrap();
         assert_eq!(report2.pruned_rows, 0, "second pass prunes nothing");
         let rollup_days2: i64 = store
             .conn
@@ -10406,7 +10489,7 @@ mod sync_methods_tests {
 
         // Server-backed user (require_synced=true): only the acknowledged row prunes;
         // both are still rolled up first so no envelope is lost.
-        let report = store.compact_streams("dev-1", now, 14, true).unwrap();
+        let report = store.compact_streams("dev-1", now, 14, 90, true).unwrap();
         assert_eq!(report.pruned_rows, 1, "only synced=1 raw pruned for server users");
         let remaining: i64 = store
             .conn
@@ -10426,6 +10509,83 @@ mod sync_methods_tests {
             )
             .unwrap();
         assert_eq!(cnt, 2, "rollup captured both rows before pruning");
+    }
+
+    #[test]
+    fn test_compact_streams_spo2_candidate_ratio_survives_prune() {
+        let store = make_store();
+        let day = 86_400.0;
+        let now = 100.0 * day + 3600.0;
+        // Old day (outside the 14-day window) — raw will be pruned. Two samples whose
+        // per-sample red/IR ratios average to a known value.
+        let old = 80.0 * day;
+        store
+            .conn
+            .execute(
+                "INSERT INTO spo2_samples (device_id, ts, red, ir, contact) VALUES \
+                 ('dev-1', ?1, 1800, 1000, 1), ('dev-1', ?2, 2200, 1000, 1)",
+                params![old, old + 1.0],
+            )
+            .unwrap();
+
+        let report = store.compact_streams("dev-1", now, 14, 90, false).unwrap();
+        assert!(report.candidate_days >= 1, "a spo2 candidate day was written");
+
+        // Raw is gone...
+        let raw: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM spo2_samples", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(raw, 0, "old spo2 raw pruned past the window");
+        // ...but the calibration-independent daily mean ratio survives: (1.8 + 2.2)/2.
+        let ratio: f64 = store
+            .conn
+            .query_row(
+                "SELECT value FROM metric_series WHERE source='goose.candidate.v0' \
+                 AND metric_name='spo2_red_ir_ratio_mean' AND date=date(?1,'unixepoch')",
+                params![old],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!((ratio - 2.0).abs() < 1e-9, "mean of per-sample ratios survives prune");
+    }
+
+    #[test]
+    fn test_compact_streams_minute_tier_downsamples_and_expires() {
+        let store = make_store();
+        let day = 86_400.0;
+        let now = 100.0 * day + 3600.0;
+        // Two optical samples in the SAME minute on a complete day -> one minute row.
+        let t = 90.0 * day; // minute-aligned
+        insert_optical_row(&store, t, 0, 10, 0);
+        insert_optical_row(&store, t, 1, 30, 0);
+        // A very old sample (beyond the 90-day minute window) that should expire.
+        insert_optical_row(&store, 5.0 * day, 0, 7, 0);
+
+        let report = store.compact_streams("dev-1", now, 14, 90, false).unwrap();
+        assert!(report.rolled_up_minutes >= 1, "minute rollup wrote rows");
+
+        // The day-90 minute bucket aggregates both samples (count=2, mean=20).
+        let (cnt, mean): (i64, f64) = store
+            .conn
+            .query_row(
+                "SELECT sample_count, mean_value FROM stream_minute_rollup \
+                 WHERE stream='optical_samples' AND minute_ts = CAST(?1/60 AS INTEGER)*60",
+                params![t],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((cnt, mean), (2, 20.0));
+        // The day-5 minute row is older than the 90-day window -> expired.
+        let old_minute: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM stream_minute_rollup WHERE minute_ts = CAST(?1/60 AS INTEGER)*60",
+                params![5.0 * day],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_minute, 0, "minute rows past the 90-day window expire");
     }
 
     #[test]

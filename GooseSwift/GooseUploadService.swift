@@ -514,6 +514,7 @@ final class GooseUploadService: @unchecked Sendable {
             "device_id": deviceID.uuidString,
             "now_ts": Date().timeIntervalSince1970,
             "retention_days": 14,
+            "minute_retention_days": 90,
             "require_synced": serverConfigured,
           ]
         )
