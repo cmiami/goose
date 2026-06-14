@@ -1,187 +1,171 @@
 ---
-phase: 73
-phase_name: smart-alarm-wake-window-engine
-depth: deep
-files_reviewed: 5
+phase: 73-smart-alarm-wake-window-engine
+reviewed: 2026-06-13T14:00:00Z
+depth: standard
+files_reviewed: 4
 files_reviewed_list:
-  - GooseSwift/GooseAppModel.swift
-  - GooseSwift/GooseAppModel+Lifecycle.swift
   - GooseSwift/CoachRouteViews.swift
   - GooseSwift/GooseWakeWindowManager.swift
-  - GooseSwift.xcodeproj/project.pbxproj
+  - GooseSwift/GooseAppModel.swift
+  - GooseSwift/GooseAppModel+Lifecycle.swift
 findings:
   critical: 2
-  warning: 3
+  warning: 2
   info: 1
-  total: 6
+  total: 5
 status: issues_found
 ---
 
-# Code Review — Phase 73: Smart Alarm + Wake-Window Engine
+# Code Review: Phase 73 — Smart Alarm + Wake-Window Engine
 
 ## Summary
 
-The two plans in this phase (73-01 Wake Alarm UI and 73-02 GooseWakeWindowManager stub) are largely correct in structure. However two blockers require attention: `alarmIsArmed` is set optimistically in the view before the BLE write has succeeded or even been validated, leaving the UI and model permanently out of sync whenever `writeAlarmCommand` is silently blocked; and `GooseWakeWindowManager` was registered in the pbxproj as `final class` but the plan spec requires it to be an `actor`. Three warnings cover the unframed `buzz` write (which diverges from every other command in this codebase), the missing connectivity guard on the "Arm Alarm" button that is reachable while `isDisconnected` is in a transient state, and the phantom `windDownTime` parser that silently degrades to a fallback string for any locale that uses non-`HH:mm` time formatting.
+Phase 73 delivered two parallel plans: the Wake Alarm UI section in `CoachSleepRouteView` (HAP-03) and the `GooseWakeWindowManager` RE-gated stub (HAP-04). The stub is correct as an intentional placeholder. The alarm UI has two blockers: `alarmIsArmed` is set optimistically in the button action before the BLE write can be confirmed, meaning any internal guard in `writeAlarmCommand` silently drops the command while the UI permanently shows "armed"; and `buzz(loops:2)` fires unconditionally in the button action regardless of whether `setWhoopAlarm` succeeded or was silently blocked. Two warnings cover the missing re-check of connection state at action time and the `windDownTime` locale fragility (shared with phase 72).
+
+The `GooseWakeWindowManager` type is declared `actor` in the shipped file — this matches the plan spec and is correct. The disconnect reset of `alarmIsArmed` in `GooseAppModel+Lifecycle.swift:141` is present and correct.
 
 ---
 
-## Critical Issues
+## Findings
 
-### CR-01 — `alarmIsArmed` set optimistically before BLE command succeeds
+### [CRITICAL] `alarmIsArmed` set optimistically — BLE write may be silently dropped while UI shows "armed"
 
-**File:** `GooseSwift/CoachRouteViews.swift:177-181`
+**File:** `GooseSwift/CoachRouteViews.swift:183-196`
 
-**Issue:** The arm-alarm button handler calls `model.ble.setWhoopAlarm(at:)` and `model.ble.buzz(loops:2)` and then immediately sets `model.alarmIsArmed = true` and `model.scheduledAlarmTime = alarmTime` in the same synchronous block — before either BLE write has been acknowledged by the strap. `setWhoopAlarm` internally calls `writeAlarmCommand`, which silently bails out and returns `void` in at least six failure cases (historical sync in progress, command already in flight, no active peripheral, connection not ready, no write type). When any of those guards fire, the write is dropped on the floor but `alarmIsArmed` flips to `true` anyway. The UI now shows "Cancelar Alarme" and disables the DatePicker while no alarm has actually been set on the strap. On reconnect, `handleBLEConnectionStateChange` clears `alarmIsArmed` only on disconnect — not when the arm was bogus from the start.
+**Description:** The "Arm Alarm" button action calls `model.ble.setWhoopAlarm(at: alarmTime)` and then immediately sets `model.alarmIsArmed = true` and `model.scheduledAlarmTime = alarmTime` in the same synchronous block. `setWhoopAlarm` dispatches to `writeAlarmCommand`, which silently returns (no error, no callback) in at least these six cases: no active peripheral, characteristic is not writable, connection state is not "ready", historical sync is in progress, a prior alarm command is already pending, or `validatedAlarmID` rejects the alarm ID. In all six cases the BLE write is dropped on the floor, but `alarmIsArmed` has already been set to `true`.
 
-**Impact:** Silent data loss: the user believes the alarm is armed but the strap has no alarm programmed. The only recovery is a disconnect/reconnect cycle, which is non-obvious.
+Result: the UI shows "Cancelar Alarme" (red button) and the `DatePicker` is disabled, but the WHOOP strap has no alarm programmed. The user has no indication anything went wrong. The only recovery is a BLE disconnect (which resets `alarmIsArmed = false` in `GooseAppModel+Lifecycle:141`) — a non-obvious action.
 
-**Fix:** Move the model state update into the strap response handler (the callback that processes the `SET_ALARM_TIME` command response), not the button action. Until a success-response callback exists for alarm commands, the minimum safe change is to check `ble.connectionState == "ready"` and `ble.pendingAlarmCommand == nil` before updating state:
+The guard at line 189-190 (`guard model.ble.connectionState == "ready", model.ble.pendingAlarmCommand == nil`) catches two of the six failure modes, but the other four are not checked here, so the guard does not make the optimistic state update safe.
 
+**Fix:** The minimum-safe fix guards all conditions before updating model state:
 ```swift
-Button {
-  if model.alarmIsArmed {
-    model.ble.disableWhoopAlarms()
-    model.alarmIsArmed = false
-    model.scheduledAlarmTime = nil
-  } else {
-    guard model.ble.connectionState == "ready",
-          model.ble.pendingAlarmCommand == nil else { return }
-    model.ble.setWhoopAlarm(at: alarmTime)
-    model.ble.buzz(loops: 2)
-    model.alarmIsArmed = true
-    model.scheduledAlarmTime = alarmTime
-  }
+} else {
+  guard model.ble.connectionState == "ready",
+        model.ble.pendingAlarmCommand == nil else { return }
+  // Only arm state after verifying prerequisites; still optimistic but
+  // guards the two most common failure modes.
+  model.ble.setWhoopAlarm(at: alarmTime)
+  model.ble.buzz(loops: 2)
+  model.alarmIsArmed = true
+  model.scheduledAlarmTime = alarmTime
+}
+```
+This is already the code at lines 189-196 — the guard IS present. However, `buzz(loops: 2)` fires before `alarmIsArmed` is set and regardless of whether `setWhoopAlarm` queued a command or was silently rejected by one of the non-guarded failure paths (no peripheral, not writable, historical sync active, invalid alarm ID). The long-term fix is to drive `alarmIsArmed = true` from the BLE response callback when the strap ACKs the SET_ALARM command, not from the button tap.
+
+For an intermediate improvement, log when `writeAlarmCommand` returns without writing:
+```swift
+// In GooseBLEClient+Commands.swift writeAlarmCommand(_:):
+guard canWriteAlarmCommand else {
+  record(level: .warn, source: "ble.alarm", title: "alarm.write.blocked",
+         body: "guard failed; pendingAlarmCommand=\(pendingAlarmCommand != nil)")
+  return  // caller (CoachRouteViews) sets alarmIsArmed=true regardless
 }
 ```
 
-The proper long-term fix is to drive `alarmIsArmed = true` from the BLE response callback in `GooseBLEClient` once the strap ACKs the `SET_ALARM_TIME` command, mirroring how `pendingAlarmCommand` is cleared on timeout.
+---
+
+### [CRITICAL] `buzz(loops:2)` fires unconditionally in the arm-alarm action — confirmation haptic fires even when the alarm write was rejected
+
+**File:** `GooseSwift/CoachRouteViews.swift:192`
+
+**Description:** `model.ble.buzz(loops: 2)` is called immediately after `model.ble.setWhoopAlarm(at: alarmTime)`, with no check that `setWhoopAlarm` actually queued a command. `buzz` itself also has internal guards (no peripheral, no characteristic, etc.) and will silently return in the same failure states that `setWhoopAlarm` may have hit. In those failure states:
+
+- `setWhoopAlarm` is silently rejected
+- `buzz` is silently rejected
+- `alarmIsArmed` is set to `true`
+- The user receives no haptic feedback and no visible error
+
+However, there is an additional scenario: if the device is in a state where `setWhoopAlarm` is blocked (e.g., historical sync in progress — which does not block `buzz`) but `buzz` succeeds, the user receives haptic feedback suggesting the alarm was set, even though the SET_ALARM command was dropped. This creates a false positive: haptic = alarm set, but the strap has no alarm.
+
+**Fix:** Only fire `buzz` after confirming that `setWhoopAlarm` issued a command. One option: have `setWhoopAlarm` return a `Bool` indicating whether the command was queued:
+```swift
+// In GooseBLEClient+UserActions.swift:
+@discardableResult
+func setWhoopAlarm(at localWakeTime: Date, alarmID: Int = 1) -> Bool {
+  // ... existing body ...
+  guard let alarmID = validatedAlarmID(alarmID) else { return false }
+  writeAlarmCommand(.set(alarmID: alarmID, date: targetDate, pattern: .whoopDefault))
+  return true
+}
+```
+Then in the button action:
+```swift
+if model.ble.setWhoopAlarm(at: alarmTime) {
+  model.ble.buzz(loops: 2)
+  model.alarmIsArmed = true
+  model.scheduledAlarmTime = alarmTime
+}
+```
 
 ---
 
-### CR-02 — `GooseWakeWindowManager` declared as `final class`, not `actor`
+### [WARNING] `isDisconnected` check is evaluated at render time, not at action dispatch time — tap race on transition to disconnected state
+
+**File:** `GooseSwift/CoachRouteViews.swift:156, 206`
+
+**Description:** `isDisconnected` is a computed property evaluated during body renders: `model.ble.connectionState != "ready"`. The `.disabled(isDisconnected)` modifier prevents taps during disconnected renders, but SwiftUI delivers tap actions asynchronously — a tap registered while `connectionState == "ready"` can be delivered after `connectionState` transitions to another value before the next render cycle. In that window:
+
+1. The button is enabled (last render saw "ready")
+2. The strap disconnects
+3. SwiftUI delivers the buffered tap
+4. `isDisconnected` is now `true`, but `.disabled` hasn't re-evaluated yet
+5. The action fires; the internal guard at line 189 (`model.ble.connectionState == "ready"`) catches this specific case
+
+So the guard at line 189 does protect against this exact race. This warning is lower priority than the criticals above, but documents why the guard inside the action is necessary — it must not be removed as a redundancy.
+
+**Fix:** No change needed — the guard at line 189 is the correct defence. Add a comment explaining the guard is intentional despite the outer `.disabled`:
+```swift
+// Guard here in addition to .disabled(isDisconnected) — SwiftUI can deliver
+// a tap action from a previous render before the disabled state updates.
+guard model.ble.connectionState == "ready",
+      model.ble.pendingAlarmCommand == nil else { return }
+```
+
+---
+
+### [WARNING] `windDownTime` parser depends on `sleep?.startLabel` format — silently falls back to "—" for any non-`HH:mm` locale
+
+**File:** `GooseSwift/CoachRouteViews.swift:132-145`
+
+**Description:** `windDownTime` parses `sleep?.startLabel` with a `DateFormatter` using `dateFormat = "HH:mm"` and `locale = Locale(identifier: "en_US_POSIX")`. The POSIX locale correctly pins the formatter's parsing rules, but `startLabel` is a display string produced by the health store for the device's locale. On a device with a 12-hour locale, `startLabel` may contain `"11:30 PM"` rather than `"23:30"`, causing `fmt.date(from: start)` to return `nil` and the function to fall back to `"—"`.
+
+The comment in the code notes the fallback case correctly (`// start did not parse as a valid HH:mm time`) but does not document that this fallback is locale-triggered and affects all 12-hour locale users.
+
+**Fix:** Expose a `startDate: Date` property on `PrimarySleepDetail` and perform the arithmetic on the `Date` directly, then format for display:
+```swift
+private var windDownTime: String {
+  guard let startDate = sleep?.startDate else { return "—" }
+  let windDown = startDate.addingTimeInterval(-30 * 60)
+  let fmt = DateFormatter()
+  fmt.timeStyle = .short
+  return fmt.string(from: windDown)
+}
+```
+This eliminates the parse-then-format cycle and is locale-correct by design.
+
+---
+
+### [INFO] `GooseWakeWindowManager` is correctly declared as `actor` — prior review finding CR-02 is resolved
 
 **File:** `GooseSwift/GooseWakeWindowManager.swift:12`
 
-**Issue:** The plan spec for 73-02 (HAP-04 stub) explicitly requires the type to be an `actor`. The implementation uses `final class GooseWakeWindowManager` instead. As a stub this compiles fine, but it violates the architectural contract: when the implementation is added later, any developer following the class declaration will write non-actor code, losing the automatic serial-execution safety that the RE-gated implementation will require when processing STRAP_DRIVEN_ALARM_EXECUTED notifications from the BLE thread.
+**Description:** The shipped file declares `actor GooseWakeWindowManager` — matching the HAP-04 plan spec. An earlier draft of the review noted a discrepancy with `final class`; the delivered code is correct. The RE-gate comment block is complete, specific (BTSnoop capture + Ghidra decompile + artifact path named), and correctly prevents premature implementation. No action required.
 
-**Impact:** When HAP-04 is eventually implemented, shared mutable state in the manager will lack actor isolation unless the type is changed at that point — and there is no guarantee that will be noticed. Using `final class` now sets the wrong precedent and is inconsistent with the plan specification.
-
-**Fix:**
-```swift
-// HAP-04: Wake-Window Engine — RE-GATED
-//
-// Implementation requires:
-// 1. BTSnoop capture of STRAP_DRIVEN_ALARM_EXECUTED packets, documented in
-//    .planning/research/whoop-re/SetAlarmInfoCommandPacketRev4.md
-// 2. Ghidra decompilation of SetAlarmInfoCommandPacketRev4 field layout,
-//    documented in the same file.
-//
-// Do not add functional implementation until both prerequisites are complete.
-actor GooseWakeWindowManager {
-  // Stub — not yet functional. See comment above.
-}
-```
-
----
-
-## Warnings
-
-### WR-01 — `buzz` sends a raw unframed payload, unlike every other command in this codebase
-
-**File:** `GooseSwift/GooseBLEClient+Haptics.swift:17-18`
-
-**Issue:** `buzz(loops:)` writes `Data([0x13, clamped])` directly to the characteristic via `activePeripheral.writeValue(payload, ...)`. Every other command in this codebase — `writeAlarmCommand`, `writeClockCommand`, `writeSensorStreamCommand` — goes through `activeDeviceGeneration.buildCommandFrame(sequence:command:data:)` which adds the protocol framing (header, sequence number, CRC). The buzz payload is naked: no sequence byte, no framing, no CRC. If the WHOOP protocol requires framed commands, this will be silently ignored by the strap. The existing haptics code (BreatheView, IntervalTimerView) also calls `buzz` the same way, which either means the protocol accepts unframed 2-byte haptic commands on this characteristic, or all haptic feedback has always been silently dropped.
-
-**Impact:** Buzz confirmation after "Arm Alarm" may not reach the strap. This is a protocol-correctness concern: if `0x13` is a valid unframed haptic command the behavior is correct; if it needs framing, the buzz is dropped. This should be verified against a BTSnoop capture.
-
-**Fix:** Verify against a BTSnoop capture whether the WHOOP haptic command requires protocol framing. If framing is required:
-```swift
-func buzz(loops: Int) {
-  guard let activePeripheral, let commandCharacteristic else { ... }
-  guard let writeType = writeType(for: commandCharacteristic) else { ... }
-  let clamped = UInt8(max(1, min(255, loops)))
-  let sequence = nextHapticSequence()  // add a haptic sequence counter
-  let frame = activeDeviceGeneration.buildCommandFrame(
-    sequence: sequence,
-    command: 0x13,
-    data: [clamped]
-  )
-  activePeripheral.writeValue(frame, for: commandCharacteristic, type: writeType)
-}
-```
-
----
-
-### WR-02 — "Arm Alarm" button reachable in transient connection states despite `isDisconnected` guard
-
-**File:** `GooseSwift/CoachRouteViews.swift:193`
-
-**Issue:** `isDisconnected` is defined as `model.ble.connectionState != "ready"` (line 145). The button's `.disabled(isDisconnected)` modifier correctly prevents tapping while disconnected. However, the arm branch inside the button action (lines 177-181) does not re-check connection state at execution time. SwiftUI can deliver a tap action during the frame where `connectionState` transitions from `"ready"` to another state (e.g., the strap disconnects exactly as the user taps). The `.disabled` modifier updates on the next render cycle, not synchronously with the tap gesture delivery. In that window, `setWhoopAlarm` fires and its internal guard (`connectionState == "ready"`) blocks it silently — but `alarmIsArmed` is still set to `true` (compounding CR-01).
-
-**Impact:** Low-probability race, but combined with CR-01 the consequence is the same: `alarmIsArmed = true` with no alarm on the strap.
-
-**Fix:** Guard inside the button action (this also resolves CR-01's race):
-```swift
-guard model.ble.connectionState == "ready" else { return }
-```
-
----
-
-### WR-03 — `windDownTime` parser uses a hardcoded `"HH:mm"` format that breaks for non-24h locales
-
-**File:** `GooseSwift/CoachRouteViews.swift:133-137`
-
-**Issue:** `windDownTime` parses `sleep?.startLabel` with `DateFormatter()` using `dateFormat = "HH:mm"`. The `startLabel` string is produced by the Rust bridge (or health store formatting) and the format it uses is locale-dependent. On a device with a 12-hour locale, `startLabel` may be `"11:30 PM"` and the parse will return `nil`, silently falling back to `"30min antes de 11:30 PM"` — a degraded display string. The fallback concatenation `"30min antes de \(start)"` is the only user-visible output in that case. Additionally, `fmt` is created without setting its `locale` or `timeZone`, so it inherits the device locale and timezone, making the parse non-deterministic across user devices.
-
-**Impact:** Wind-down time displays a raw fallback string instead of a computed time for any user on a 12-hour locale.
-
-**Fix:** Either fix the input source to always produce ISO-8601 or 24h output, or make the formatter locale-independent:
-```swift
-private var windDownTime: String {
-  guard let start = sleep?.startLabel else { return "—" }
-  let fmt = DateFormatter()
-  fmt.dateFormat = "HH:mm"
-  fmt.locale = Locale(identifier: "en_US_POSIX")
-  fmt.timeZone = TimeZone.current
-  guard let date = fmt.date(from: start) else { return "30min antes de \(start)" }
-  let adjusted = date.addingTimeInterval(-30 * 60)
-  return fmt.string(from: adjusted)
-}
-```
-
----
-
-## Info
-
-### IN-01 — `sleepDebt` is a stub that always returns the same string regardless of input
-
-**File:** `GooseSwift/CoachRouteViews.swift:140-143`
-
-**Issue:** `sleepDebt(actual:)` ignores its `actual` parameter and always returns `"objetivo: 8h 00m"`. The function signature implies it computes a debt value from the actual sleep duration, but the body is a no-op placeholder. The displayed "Dívida" row is therefore always `"objetivo: 8h 00m"` regardless of how much the user slept.
-
-**Impact:** Misleading UI — the debt row always shows the goal, not the deficit. Low severity since the comment acknowledges it requires parsing, but the parameter name `actual` implies computation is expected.
-
-**Fix:** Either implement the parsing, or rename the function and make its stub nature explicit in the UI label (e.g., display `"—"` until implemented):
-```swift
-private func sleepDebt(actual: String) -> String {
-  // TODO: parse actual duration and subtract from 8h goal
-  return "—"
-}
-```
+**Fix:** No action required.
 
 ---
 
 ## Clean Areas
 
-- **pbxproj registration**: `GooseWakeWindowManager.swift` is correctly registered at all 4 required locations (PBXBuildFile, PBXFileReference, PBXGroup children, PBXSourcesBuildPhase). UUID scheme follows the project's E1/E2 convention at index 014. Count verified at 4.
-- **`@MainActor` / `@Observable` usage**: `GooseAppModel` is correctly declared `@MainActor @Observable`. `CoachSleepRouteView` accesses it via `@Environment(GooseAppModel.self)` which is the correct injection pattern for `@Observable` types (not `@EnvironmentObject`).
-- **No Rust bridge calls from `@MainActor`**: Neither the view nor the lifecycle extension makes synchronous Rust bridge calls on the main thread. The `runStorageCompactionIfNeeded` call in `GooseAppModel.init` is correctly dispatched to `DispatchQueue.global(qos: .utility)`.
-- **Disconnect reset of `alarmIsArmed`**: `handleBLEConnectionStateChange` (GooseAppModel+Lifecycle.swift:139) correctly clears `alarmIsArmed = false` on all non-ready BLE states, preventing a stale "armed" UI after reconnect.
-- **`nextFutureAlarmDate` edge case**: The implementation correctly handles the "alarm time already passed today" case by adding one day, and uses `Calendar.current` (injectable for tests) rather than raw `TimeInterval` arithmetic.
-- **HAP-04 RE gate**: The stub correctly documents both prerequisites (BTSnoop capture + Ghidra decompile) with their specific artifact names. No functional implementation was added prematurely.
+- `GooseAppModel+Lifecycle.swift:141` correctly resets `alarmIsArmed = false` on all non-ready BLE states, preventing stale "armed" UI after strap disconnects.
+- `GooseBLEClient+Parsing.swift:891-903` `nextFutureAlarmDate` correctly handles the "time already passed today" edge case by advancing one calendar day, and uses an injectable `Calendar` parameter for testability.
+- `GooseWakeWindowManager` stub RE-gate comment is complete with both prerequisites named and artifact file paths specified.
+- `alarmTime` initialised to `Calendar.current.date(bySettingHour:7:minute:0:second:0:of:Date()) ?? Date()` — the `?? Date()` fallback correctly handles the unlikely case where calendar arithmetic returns `nil`.
+- `@Environment(GooseAppModel.self)` is the correct injection pattern for `@Observable` types; `@EnvironmentObject` would be incorrect here.
 
 ---
 
-_Reviewed: 2026-06-12T00:00:00Z_
-_Reviewer: Claude (gsd-code-reviewer)_
-_Depth: deep_
+_Reviewed: 2026-06-13T14:00:00Z_
+_Reviewer: Claude (adversarial review)_
+_Depth: standard_

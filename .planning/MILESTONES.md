@@ -1,5 +1,22 @@
 # Milestones
 
+## v10.0 Protocol Parity, Haptics & Feature Completeness (Shipped: 2026-06-13)
+
+**Phases completed:** 7 phases, 17 plans, 16 tasks
+
+**Key accomplishments:**
+
+- buzz(loops:) BLE command extension on GooseBLEClient — writes Data([0x13, N]) directly to commandCharacteristic with UInt8 clamping and nil-guard, no frame sequence
+- BreatheView with 4s/4s/4s box-breathing loop (circle 0.6→1.0→0.6 scaleEffect), buzz(loops:1) at each phase start, Wellness section in MoreView, full navigation wiring via MoreRoute.breathe
+- CoachVOWNudge priority enum (4 cases) + CoachVOWCard dismissable view inserted between CoachJournalCard and CoachRoutesSection in CoachOverviewScreen, computing urgency from existing healthStore snapshots with nil-safe Double() parse
+- IntervalTimerView
+- NotificationScheduler actor encapsulating all UNUserNotificationCenter calls, wired to three event sites: sleep sync completion, passive workout detection, and WHOOP battery ≤ 20%
+- 1. [Rule 1 - Bug] Typo in TrendsDashboardViews.swift stroke style
+- GooseAppModel.swift
+- GooseWakeWindowManager.swift RE-gated stub — empty compilable class with BTSnoop/Ghidra prerequisite doc comment, registered at 4 pbxproj locations, xcodebuild succeeds
+
+---
+
 ## v8.0 Quality, Completeness & Backlog Clearance (Shipped: 2026-06-11)
 
 **Phases completed:** 9 phases (51–59) + Phase 60 (Band-First Sync, v9.0 start)

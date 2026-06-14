@@ -9,4 +9,3 @@ protocol GooseBLEManaging: AnyObject {
   func stopScanning()
 }
 
-// TODO(future): extension GooseBLEClient: GooseBLEManaging {}

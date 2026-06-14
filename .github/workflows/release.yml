@@ -126,13 +126,15 @@ jobs:
           RELEASE_TAG: ${{ needs.build-ipa.outputs.tag }}
         run: |
           TAG="$RELEASE_TAG"
-          PREV_TAG=$(git tag --sort=version:refname | grep "^v" | awk "/${TAG}/{found=1; next} found{print; exit}" | head -1)
-          PREV_TAG_BEFORE=$(git tag --sort=version:refname | grep "^v" | awk "p==1{print; exit} /${TAG}/{p=1}" | head -1)
+          # Find the tag immediately before TAG in version order
+          PREV_TAG=$(git tag --sort=version:refname | grep "^v" | awk -v tag="$TAG" '$0==tag{print prev; exit} {prev=$0}')
 
-          if [ -n "$PREV_TAG_BEFORE" ]; then
-            NOTES=$(git log "${PREV_TAG_BEFORE}..${TAG}" --pretty=format:"- %s" --no-merges)
+          # Filter out planning/infra commits — keep only user-facing feat/fix/perf/refactor
+          FILTER='^\- (docs|chore|test|ci|build|fix\(release\)|fix\(altstore\)|chore\(altstore\))'
+          if [ -n "$PREV_TAG" ]; then
+            NOTES=$(git log "${PREV_TAG}..${TAG}" --pretty=format:"- %s" --no-merges | grep -Ev "$FILTER" | head -20)
           else
-            NOTES=$(git log "${TAG}" --pretty=format:"- %s" --no-merges | head -30)
+            NOTES=$(git log "${TAG}" --pretty=format:"- %s" --no-merges | grep -Ev "$FILTER" | head -20)
           fi
 
           {
@@ -149,6 +151,7 @@ jobs:
           IPA_NAME: ${{ needs.build-ipa.outputs.ipa-name }}
           IPA_SIZE: ${{ needs.build-ipa.outputs.ipa-size }}
         with:
+          github-token: ${{ secrets.GH_PAT || github.token }}
           script: |
             const fs = require('fs');
             const tag = process.env.RELEASE_TAG;

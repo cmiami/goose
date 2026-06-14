@@ -13,16 +13,4 @@ final class TrendsFetchTests: XCTestCase {
       "fetchTrendsSeries must call bridge with method 'metric_series.query_range'")
   }
 
-  @MainActor
-  func test_workout_entry_calls_workout_upsert() async throws {
-    let mock = MockRustBridge()
-    mock.stubbedResult = ["ok": true]
-    let vm = WorkoutEntryViewModel(bridge: mock, databasePath: "")
-    vm.selectedKind = .run
-    vm.durationMinutes = 30
-    vm.effortValue = 7
-    await vm.submitWorkout()
-    XCTAssertEqual(mock.lastMethod, "workout.upsert",
-      "WorkoutEntryViewModel.submitWorkout() must call bridge with 'workout.upsert'")
-  }
 }

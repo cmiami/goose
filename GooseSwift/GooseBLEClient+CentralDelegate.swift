@@ -276,6 +276,7 @@ extension GooseBLEClient: CBCentralManagerDelegate {
     let shouldReconnect = rememberedDeviceID == peripheral.identifier
     autoConnectForPhysiologyCapture = false
     autoStartedPhysiologyCapture = false
+    authRetryPending = false
     readySyncWorkItem?.cancel()
     stopPeriodicAutomaticSyncTimer()
     if isHistoricalSyncing {

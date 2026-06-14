@@ -1,126 +1,153 @@
+---
+focus: tech
+last_mapped: 2026-06-13
+---
 # Technology Stack
 
-**Analysis Date:** 2026-06-04
+**Analysis Date:** 2026-06-13
 
 ## Languages
 
 **Primary:**
-- Swift 5.0 — iOS app, all UI and business logic; 137 source files under `GooseSwift/` and `GooseWorkoutLiveActivityExtension/`
-- Rust (Edition 2024, MSRV 1.96 per `Rust/core/Cargo.toml`) — core library at `Rust/core/src/`; protocol parsing, metric computation, SQLite persistence, C FFI bridge
+- Swift 5.0 — all iOS app code in `GooseSwift/` and `GooseWorkoutLiveActivityExtension/`
+- Rust (Edition 2024, MSRV 1.96) — protocol parsing, metric algorithms, SQLite persistence, FFI bridge in `Rust/core/src/`
 
 **Secondary:**
-- Python 3.11 — self-hosted ingest server under `server/ingest/`; FastAPI app + analytics pipeline
+- Python 3.12 — server ingest service in `server/ingest/`; reference algorithm scripts in `Rust/core/tools/reference/` (not runtime)
 - Bash — Rust cross-compilation script at `Scripts/build_ios_rust.sh`
 
-**Reference / tooling only:**
-- Python scripts under `Rust/core/tools/reference/` (neurokit2, pyhrv, pyactigraphy, ggir) — algorithm validation only, not in the production Docker image
+## Runtime
 
-## Runtime & Platform
+**iOS App:**
+- iOS 26.0 deployment target (`IPHONEOS_DEPLOYMENT_TARGET = 26.0` in `GooseSwift.xcodeproj/project.pbxproj`)
+- ARM64 device (`aarch64-apple-ios`), ARM64 simulator (`aarch64-apple-ios-sim`), x86_64 simulator (`x86_64-apple-ios`)
 
-**iOS app:**
-- Deployment target: iOS 26.0 (`IPHONEOS_DEPLOYMENT_TARGET = 26.0` in `GooseSwift.xcodeproj/project.pbxproj`)
-- Supported architectures: `aarch64-apple-ios` (device), `aarch64-apple-ios-sim` (ARM64 simulator), `x86_64-apple-ios` (x86_64 simulator)
-- Bundle ID: `com.goose.swift` (main), `com.goose.swift.WorkoutLiveActivityExtension` (extension)
+**Server:**
+- Python 3.12 (FastAPI + uvicorn)
+- Docker — TimescaleDB 2.17.2-pg16 container + ingest container
+- `server/docker-compose.yml` defines both services
+
+**Package Manager:**
+- Swift: no SPM; project managed via `GooseSwift.xcodeproj`. Local packages at `Packages/WhoopProtocol/` and `Packages/WhoopStore/` exist but contain no source files.
+- Rust: Cargo; lockfile at `Rust/core/Cargo.lock` (committed)
+- Python: pip; `server/ingest/requirements.txt` and `server/ingest/requirements-dev.txt`
+
+## iOS Frameworks
+
+**Core UI:**
+- SwiftUI — all UI; imported by 80+ files
+- UIKit — appearance config and low-level hooks; 81 files
+
+**System:**
+- Foundation — universal; 97 files
+- CoreBluetooth — BLE communication with WHOOP; `GooseSwift/GooseBLEClient.swift` + `GooseBLEClient+*.swift`; 14 files
+- HealthKit — body mass autofill from Apple Health; `GooseSwift/GooseAppModel+HealthKit.swift`; 11 files
+- CoreLocation + MapKit — GPS for outdoor workouts; 12 + 9 files
+- Network — `NWPathMonitor` for reachability; `GooseSwift/GooseNetworkMonitor.swift`
+- BackgroundTasks — `BGTaskScheduler` for deferred sync; `GooseSwift/GooseSwiftApp.swift`, `GooseSwift/GooseAppModel+BandFirstSync.swift`
+
+**Live Activity / Notifications:**
+- ActivityKit — Live Activity lifecycle; `GooseSwift/WorkoutLiveActivityController.swift`
+- WidgetKit — Dynamic Island extension; `GooseWorkoutLiveActivityExtension/GooseWorkoutLiveActivityWidget.swift`
+- UserNotifications — permission onboarding; `GooseSwift/OnboardingModels.swift`, `GooseSwift/OnboardingPermissions.swift`
+
+**Security / Crypto:**
+- Security — iOS Keychain for API key storage; `GooseSwift/CodexEmbeddedAuth.swift`, `GooseSwift/ClaudeCoachProvider.swift`
+- CryptoKit — SHA-256 checksums for export; 5 files
+
+**Observability:**
+- OSLog — structured logging; 11 files; subsystem `com.goose.swift`
+
+## Rust Library (FFI)
+
+- Crate name: `goose-core` version `8.0.0`
+- Crate types: `rlib`, `staticlib`, `cdylib`
+- Source root: `Rust/core/src/lib.rs`
+- Bridge dispatcher: `Rust/core/src/bridge.rs` (58+ dispatched methods)
+- Static libraries (pre-built, committed): `Rust/iphoneos/libgoose_core.a`, `Rust/iphonesimulator/libgoose_core.a`
+- FFI header: `GooseSwift/GooseSwift-Bridging-Header.h` (imports `Rust/core/include/goose_core_bridge.h`)
+- Swift bridge wrapper: `GooseSwift/GooseRustBridge.swift`
+
+## Key Rust Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `rusqlite` | 0.40 (bundled) | SQLite embedded storage (`goose.sqlite`) |
+| `serde` + `serde_json` | 1.0 | JSON serialisation for FFI bridge protocol |
+| `tungstenite` | 0.29 | WebSocket server for local debug sessions (`ws://127.0.0.1:8765`); non-Android only |
+| `zip` | 8.6 | Raw data export bundling |
+| `sha2` | 0.11 | SHA-256 digests |
+| `crc32fast` | 1.4 | CRC32 BLE frame checksums |
+| `hex` | 0.4 | Hex encoding for captured frames |
+| `thiserror` | 2.0 | Error type derivation |
+| `tempfile` | 3.13 (dev) | Test temporary files |
+
+## Key Server (Python) Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `fastapi` | 0.136.3 | HTTP API framework |
+| `uvicorn[standard]` | 0.49.0 | ASGI server |
+| `psycopg[binary]` | 3.3.4 | PostgreSQL/TimescaleDB client |
+| `pydantic` | (via fastapi) | Request validation |
+| `neurokit2` | 0.2.13 | Sleep staging, HRV computation |
+| `numpy` | 2.4.6 | Numerical computation |
+| `scipy` | 1.17.1 | Signal processing |
+| `scikit-learn` | 1.9.0 | ML for daily metrics |
+| `pandas` | 2.3.3 | Data manipulation |
+| `httpx` | >=0.28.1 | HTTP client (WHOOP official API) |
+| `zstandard` | 0.25.0 | Compression |
+
+## Build System
+
+**iOS:**
+- Xcode project: `GooseSwift.xcodeproj`
+- Rust cross-compile: `Scripts/build_ios_rust.sh` — invoked as Xcode build phase; reads `PLATFORM_NAME`, `CONFIGURATION`, `CURRENT_ARCH`, `IPHONEOS_DEPLOYMENT_TARGET`; skips rebuild if inputs unchanged
+- Bundle ID: `com.goose.swift` (app), `com.goose.swift.WorkoutLiveActivityExtension` (extension)
+- Marketing version: `0.1.0`, build `1`
 - URL scheme: `gooseswift://`
 
 **Server:**
-- Python 3.11-slim Docker image (multi-stage build defined in `server/ingest/Dockerfile`)
-- TimescaleDB 2.17.2 on PostgreSQL 16 (`timescale/timescaledb:2.17.2-pg16`)
-- Deployed via Docker Compose (`server/docker-compose.yml`) or Dockge (`server/dockge-stack.yml`)
-- Default ingest port: 8770 (configurable via `GOOSE_INGEST_PORT`)
+- Dockerfile: `server/ingest/Dockerfile`
+- Docker Compose: `server/docker-compose.yml`
+- Ingest port: `${GOOSE_INGEST_PORT:-8770}` → container port `8000`
 
-## Frameworks & Libraries
+## CI/CD
 
-**iOS — Apple frameworks:**
-- SwiftUI — all UI; 80+ files import SwiftUI
-- UIKit — appearance configuration and low-level hooks; 81 files
-- Foundation — universal; 97 files
-- CoreBluetooth — BLE communication with WHOOP devices; 14 files
-- HealthKit — body mass autofill and health data import from Apple Health; 11 files
-- CoreLocation + MapKit — GPS tracking for outdoor workouts; 12 + 9 files
-- ActivityKit — Live Activity / Dynamic Island for active workouts; `GooseSwift/WorkoutLiveActivityController.swift`
-- WidgetKit — Live Activity widget extension; `GooseWorkoutLiveActivityExtension/GooseWorkoutLiveActivityWidget.swift`
-- OSLog — structured logging; 11 files
-- CryptoKit — SHA-256 file integrity checksums on export; 5 files (`GooseSwift/GooseLocalDataExporter+FileSystem.swift` etc.)
-- Security — iOS Keychain for OAuth tokens and API keys; `GooseSwift/CodexEmbeddedAuth.swift`, `GooseSwift/RemoteServerPersistence.swift`
-- UserNotifications — notification permission onboarding; `GooseSwift/OnboardingPermissions.swift`
+**Workflows:**
 
-**Rust — crate dependencies (`Rust/core/Cargo.toml`):**
-- `rusqlite 0.37` (feature: `bundled`) — SQLite embedded in the static library; all persistence
-- `serde 1.0` + `serde_json 1.0` — JSON serialisation for the FFI bridge protocol
-- `tungstenite 0.28` — WebSocket server for local debug sessions; conditionally compiled for non-Android targets
-- `zip 0.6` — raw data export bundling
-- `sha2 0.10` — SHA-256 digests in Rust (separate from Swift CryptoKit)
-- `crc32fast 1.4` — CRC32 frame checksums
-- `hex 0.4` — hex encoding for BLE frame capture
-- `thiserror 2.0` — error type derivation
-- `tempfile 3.13` (dev-only) — test temporary files
+| Workflow | File | Trigger | Runner |
+|----------|------|---------|--------|
+| Swift Build | `.github/workflows/swift-build.yml` | push main (`GooseSwift/**`), all PRs | `macos-15` + Xcode 26.3 |
+| Rust core | `.github/workflows/rust-core.yml` | push main (`Rust/**`), all PRs | `ubuntu-latest` + `macos-15` |
+| Server CI | `.github/workflows/server-ci.yml` | push main (`server/**`), all PRs | `ubuntu-latest` |
+| Security | `.github/workflows/security.yml` | scheduled | `ubuntu-latest` |
+| CodeQL | `.github/workflows/codeql.yml` | scheduled + PRs | `ubuntu-latest` |
+| Zizmor | `.github/workflows/zizmor.yml` | PRs | `ubuntu-latest` |
+| Release | `.github/workflows/release.yml` | tag push | `macos-15` |
 
-**Server — Python packages (`server/ingest/requirements.txt`):**
-- `fastapi 0.115.5` — REST API framework
-- `uvicorn[standard] 0.32.1` — ASGI server
-- `psycopg[binary] 3.2.3` — PostgreSQL client
-- `zstandard 0.23.0` — zstd compression for raw frame archives (`server/ingest/app/archive.py`)
-- `neurokit2 0.2.13` — signal processing and sleep staging
-- `numpy 2.4.6` — numerical arrays
-- `scipy 1.17.1` — signal processing (Welch PSD for respiratory rate)
-- `scikit-learn 1.8.0` — ML utilities for biometric feature pipelines
-- `pandas 2.3.3` — dataframe handling in analysis pipeline
-- `httpx >=0.27` — async HTTP client for WHOOP Developer API calls
+**Swift CI:** checkout → Xcode 26.3 select → `rustup target add aarch64-apple-ios-sim` → Cargo cache → `xcodebuild -scheme GooseSwift -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO`
 
-**Local Python package:**
-- `whoop-protocol 0.1.0` — shared WHOOP 4.0/5.0 BLE frame decoder (schema-as-data); source at `server/packages/whoop-protocol/`; installed from local path into the Docker image
+**Rust CI jobs:**
+1. `cargo fmt --all -- --check` (blocks merge)
+2. `cargo build --lib` + `cargo test --lib` on ubuntu-latest and macos-15 (blocks merge)
+3. `cargo clippy --lib` — advisory only, `continue-on-error: true` (~120 warnings exist)
 
-## Build & Tooling
+**Server CI:** Python 3.12 → pip install → Docker verify → `pytest tests/ -v --tb=short`
 
-**iOS:**
-- Xcode project: `GooseSwift.xcodeproj` (no SPM root `Package.swift`)
-- Placeholder local packages: `Packages/WhoopProtocol/`, `Packages/WhoopStore/` (`.swiftpm` metadata only; no source files)
-- Rust cross-compilation: `Scripts/build_ios_rust.sh` — invoked as an Xcode build phase; incremental (skips rebuild if inputs unchanged); output at `Rust/iphoneos/libgoose_core.a` and `Rust/iphonesimulator/libgoose_core.a`
-- Build artefact staging: `build/rust-target/goose-core/` (configured via `CARGO_TARGET_DIR`)
-- `GOOSE_SKIP_RUST_CORE_BUILD=1` — env var to skip Rust build during Xcode runs
+## Platform Requirements
 
-**Rust:**
-- Package manager: Cargo; lockfile at `Rust/core/Cargo.lock` (committed)
-- Crate type: `rlib`, `staticlib`, `cdylib` (produces static library for iOS)
-- Release profile: `opt-level=3`, `lto=thin`, `codegen-units=1`, `panic=abort`, `strip=debuginfo`
-- 15 diagnostic/validation CLI binaries defined in `Rust/core/Cargo.toml`
+**Development:**
+- macOS with Xcode 26.3+ (iOS 26.0 SDK)
+- Rust toolchain with targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`
+- iOS 26.0 device or simulator
+- Docker (for server development)
 
-**Server:**
-- Docker multi-stage build: `server/ingest/Dockerfile` (builder stage installs deps; runtime stage is lean Python 3.11-slim)
-- Orchestration: `server/docker-compose.yml` (local dev/self-hosted); `server/dockge-stack.yml` (Dockge panel deployment using pre-built GHCR image)
-- Test runner: pytest >=8 (`server/ingest/requirements-dev.txt`)
-
-## Key Dependencies
-
-- `rusqlite 0.37` (bundled) — all iOS health and packet data lives in `goose.sqlite`; every bridge call that needs persistence requires a `database_path` argument
-- `serde_json 1.0` — the FFI boundary between Swift and Rust is entirely JSON; every bridge call encodes a request and decodes a response via this crate
-- `tungstenite 0.28` — powers the local debug WebSocket server (`ws://127.0.0.1:8765`); excluded from Android builds via Cargo target cfg
-- `fastapi 0.115.5` + `psycopg 3.2.3` — the entire server ingest surface; all iOS to server uploads and dashboard reads go through these
-- `neurokit2 0.2.13` — drives the sleep-staging pipeline that runs server-side on every `compute_day` call; most CPU-intensive dependency
-- `timescale/timescaledb:2.17.2-pg16` — all decoded biometric time-series are stored as TimescaleDB hypertables; not replaceable with plain PostgreSQL without schema changes to `server/db/init.sql`
-
-## Configuration
-
-**iOS app:**
-- No config files; runtime configuration is driven by `UserDefaults` and the iOS Keychain
-- Remote server URL: `UserDefaults` key `goose.remote.serverURL` (`GooseSwift/RemoteServerPersistence.swift`)
-- Remote upload enabled: `UserDefaults` key `goose.remote.uploadEnabled`
-- Server API key: iOS Keychain, service `goose.remote`, account `apiKey` (`GooseSwift/RemoteServerPersistence.swift`)
-- OpenAI/Codex auth tokens: iOS Keychain, service `com.goose.swift.codex`, account `chatgpt-auth` (`GooseSwift/CodexEmbeddedAuth.swift`)
-- Database path: `ApplicationSupport/GooseSwift/goose.sqlite` resolved by `HealthDataStore.defaultDatabasePath()` in `GooseSwift/HealthDataStore.swift`
-- Build-time: Xcode environment variables read by `Scripts/build_ios_rust.sh` (`PLATFORM_NAME`, `CONFIGURATION`, `CURRENT_ARCH`, `IPHONEOS_DEPLOYMENT_TARGET`)
-
-**Server:**
-- All configuration via environment variables, loaded in `server/ingest/app/config.py`:
-  - `GOOSE_API_KEY` — required; Bearer token for all `/v1/` endpoints
-  - `GOOSE_DB_DSN` — required; PostgreSQL connection string (`postgresql://user:pass@host:5432/db`)
-  - `GOOSE_RAW_ROOT` — optional; filesystem path for raw frame archives (default `/data/raw`)
-  - `TZ` — timezone (default `UTC`)
-  - `GOOSE_INGEST_PORT` — host port mapping (default `8770`)
-- WHOOP Developer API (optional calibration feature):
-  - `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, `WHOOP_REFRESH_TOKEN` (or `WHOOP_REFRESH_TOKEN_FILE`)
+**iOS Entitlements:**
+- `com.apple.developer.healthkit`
+- `UIBackgroundModes: bluetooth-central, location`
+- `NSAllowsLocalNetworking: true` (debug WebSocket to Rust)
 
 ---
 
-*Stack analysis: 2026-06-04*
+*Stack analysis: 2026-06-13*

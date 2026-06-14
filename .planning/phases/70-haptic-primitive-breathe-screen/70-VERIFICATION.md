@@ -7,15 +7,19 @@ overrides_applied: 0
 human_verification:
   - test: "Tap More > Wellness > Breathe, tap Start, confirm circle animates inhale/hold/exhale with WHOOP connected and strap vibrates at each phase"
     expected: "Circle scales 0.6→1.0 on inhale, holds, 1.0→0.6 on exhale over 4s each; WHOOP strap vibrates once per phase transition"
+    result: "BLOCKED — requires live WHOOP 5.0 device; haptic feedback not verifiable in simulator"
     why_human: "BLE write to commandCharacteristic and strap motor response cannot be verified without a live WHOOP 5.0 device and OSLog inspection"
   - test: "With WHOOP disconnected, open Breathe screen — confirm 'Connect WHOOP to enable haptics' banner is visible before starting a session, and disappears once Start is tapped"
     expected: "Banner visible when !isRunning && connectionState != 'ready'; hidden during active session"
+    result: "PASS — banner 'Connect WHOOP to enable haptics' visible before Start; banner hidden during active session; Start button becomes Stop (2026-06-13 simulator)"
     why_human: "Conditional SwiftUI rendering based on BLE connection state requires live UI verification"
   - test: "Tap Start, then tap Stop mid-session — confirm session halts, circle resets to small, phase label resets to INHALE"
     expected: "phaseTask cancelled, isRunning=false, circleScale=0.6, currentPhase=.inhale animated to default"
+    result: "PASS — after Stop: circle resets to small, phase label back to INHALE, Start button reappears, banner returns (2026-06-13 simulator)"
     why_human: "State machine reset requires runtime observation; cannot be verified by static analysis"
   - test: "Navigate away from BreatheView mid-session (tap back) — confirm no OSLog buzz entries appear after navigation"
     expected: ".onDisappear calls stopSession(), Task is cancelled, no subsequent buzz(loops:1) writes"
+    result: "BLOCKED — requires OSLog observation; .onDisappear wiring confirmed by static analysis but runtime task cancellation requires device test"
     why_human: "Zombie task prevention requires runtime OSLog observation — grep confirms .onDisappear wiring but not runtime cancellation efficacy"
 ---
 

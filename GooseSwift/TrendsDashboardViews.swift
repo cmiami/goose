@@ -7,6 +7,7 @@ struct TrendsDashboardView: View {
   @State private var hrvPoints: [(date: String, value: Double)] = []
   @State private var strainPoints: [(date: String, value: Double)] = []
   @State private var isLoading = true
+  @State private var loadError: String? = nil
 
   var body: some View {
     ScrollView {
@@ -17,6 +18,11 @@ struct TrendsDashboardView: View {
 
         if isLoading {
           ProgressView()
+            .frame(maxWidth: .infinity, minHeight: 200)
+        } else if let err = loadError {
+          Text("Could not load trends: \(err)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 200)
         } else {
           TrendsSparklineCard(metric: .recovery, points: recoveryPoints, tint: .green)
@@ -36,12 +42,18 @@ struct TrendsDashboardView: View {
   }
 
   private func loadTrends() async {
-    async let recovery = (try? await store.fetchTrendsSeries(metricName: "recovery")) ?? []
-    async let hrv = (try? await store.fetchTrendsSeries(metricName: "hrv")) ?? []
-    async let strain = (try? await store.fetchTrendsSeries(metricName: "strain")) ?? []
-    recoveryPoints = await recovery
-    hrvPoints = await hrv
-    strainPoints = await strain
+    isLoading = true
+    loadError = nil
+    do {
+      async let recovery = try await store.fetchTrendsSeries(metricName: "recovery")
+      async let hrv = try await store.fetchTrendsSeries(metricName: "hrv")
+      async let strain = try await store.fetchTrendsSeries(metricName: "strain")
+      recoveryPoints = try await recovery
+      hrvPoints = try await hrv
+      strainPoints = try await strain
+    } catch {
+      loadError = error.localizedDescription
+    }
     isLoading = false
   }
 }

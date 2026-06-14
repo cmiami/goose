@@ -2,15 +2,52 @@ import SwiftUI
 
 struct MoreDebugView: View {
   @Environment(GooseAppModel.self) private var model
-  @EnvironmentObject private var packetMonitor: PacketMonitorModel
   @ObservedObject var store: MoreDataStore
   var healthStore: HealthDataStore
-  @AppStorage(OnboardingStorage.onboardingComplete) private var onboardingComplete = false
-  @AppStorage(OnboardingStorage.onboardingRedoRequested) private var onboardingRedoRequested = false
-  @State private var showDestructiveConfirmation = false
+
+  var body: some View {
+    TabView {
+      MoreDebugStatusTab(store: store, healthStore: healthStore)
+        .tabItem { Label("Status", systemImage: "antenna.radiowaves.left.and.right") }
+
+      MoreDebugCaptureTab(store: store)
+        .tabItem { Label("Capture", systemImage: "record.circle") }
+
+      MoreDebugResearchTab(store: store)
+        .tabItem { Label("Research", systemImage: "terminal") }
+    }
+    .navigationTitle("Debug")
+    .onAppear {
+      model.recordUIAction("page.opened", detail: "More Debug")
+      store.refreshBridgeStatus(model: model)
+    }
+  }
+}
+
+// MARK: - Status Tab
+
+private struct MoreDebugStatusTab: View {
+  @Environment(GooseAppModel.self) private var model
+  @ObservedObject var store: MoreDataStore
+  var healthStore: HealthDataStore
 
   var body: some View {
     List {
+      Section("Connection") {
+        MoreInfoRow(
+          title: "Device",
+          value: "\(model.ble.connectionState) | \(model.ble.activeDeviceName)",
+          systemImage: "sensor.tag.radiowaves.forward",
+          status: model.ble.connectionState == "ready" ? .ready : .blocked
+        )
+        MoreInfoRow(
+          title: "HR Spikes Filtered",
+          value: "\(model.hrSpikeCount) | valid \(GooseHRSanitizer.minValidBPM)-\(GooseHRSanitizer.maxValidBPM) bpm",
+          systemImage: "heart.slash",
+          status: model.hrSpikeCount == 0 ? .ready : .stale
+        )
+      }
+
       Section("Rust And Parser") {
         MoreInfoRow(title: "Rust Bridge/Core", value: store.coreVersionStatus, systemImage: "shippingbox", status: store.coreVersionStatus.hasPrefix("Rust core") ? .ready : .pending)
         MoreInfoRow(title: "Frame Parse", value: store.frameParseStatus, systemImage: "curlybraces.square", status: store.frameParseStatus.hasPrefix("Parsed") ? .ready : .pending)
@@ -70,14 +107,22 @@ struct MoreDebugView: View {
           Label("Refresh Snapshot", systemImage: "arrow.clockwise")
         }
       }
+    }
+    .gooseListBackground()
+  }
+}
 
+// MARK: - Capture Tab
+
+private struct MoreDebugCaptureTab: View {
+  @Environment(GooseAppModel.self) private var model
+  @EnvironmentObject private var packetMonitor: PacketMonitorModel
+  @ObservedObject var store: MoreDataStore
+  @State private var showDestructiveConfirmation = false
+
+  var body: some View {
+    List {
       Section("Health Packet Capture") {
-        MoreInfoRow(
-          title: "Connection",
-          value: "\(model.ble.connectionState) | \(model.ble.activeDeviceName)",
-          systemImage: "sensor.tag.radiowaves.forward",
-          status: model.ble.connectionState == "ready" ? .ready : .blocked
-        )
         MoreInfoRow(
           title: "Session",
           value: model.healthPacketCaptureStatus.localizedCaptureStatus,
@@ -113,6 +158,12 @@ struct MoreDebugView: View {
           value: model.respiratoryPacketWatchStatus,
           systemImage: "lungs",
           status: self.respiratoryPacketWatchStatus
+        )
+        MoreInfoRow(
+          title: "Invalid Frames",
+          value: "\(model.ble.invalidFrameCount) rejected this session",
+          systemImage: "xmark.circle",
+          status: model.ble.invalidFrameCount == 0 ? .ready : .blocked
         )
         MoreActionRow(
           title: model.healthPacketCaptureSessionID == nil ? "Start Walk Capture" : "Stop Capture",
@@ -181,12 +232,6 @@ struct MoreDebugView: View {
 
       Section("WHOOP Movement Test") {
         MoreInfoRow(
-          title: "Connection",
-          value: "\(model.ble.connectionState) | \(model.ble.activeDeviceName)",
-          systemImage: "sensor.tag.radiowaves.forward",
-          status: model.ble.connectionState == "ready" ? .ready : .blocked
-        )
-        MoreInfoRow(
           title: "Last Packet",
           value: packetMonitor.movementPacketStatus,
           systemImage: "waveform.path.ecg",
@@ -207,15 +252,6 @@ struct MoreDebugView: View {
         ) {
           model.startMovementPacketValidationTest()
         }
-      }
-
-      Section("HR Sanitizer") {
-        MoreInfoRow(
-          title: "Spikes Filtered",
-          value: "\(model.hrSpikeCount) | valid \(GooseHRSanitizer.minValidBPM)-\(GooseHRSanitizer.maxValidBPM) bpm",
-          systemImage: "heart.slash",
-          status: model.hrSpikeCount == 0 ? .ready : .stale
-        )
       }
 
       Section("WHOOP Event Signals") {
@@ -328,13 +364,156 @@ struct MoreDebugView: View {
         }
       }
 
+      Section("Command Shortcuts") {
+        ForEach(store.commandGroups) { group in
+          MoreCommandGroupRow(group: group)
+        }
+      }
+
+      Section("Protected Controls") {
+        Button {
+          showDestructiveConfirmation = true
+        } label: {
+          Label("Destructive Commands Locked", systemImage: "lock.shield")
+        }
+        MoreInfoRow(title: "Gate", value: store.destructiveGateStatus, systemImage: "lock", status: .blocked)
+      }
+    }
+    .gooseListBackground()
+    .alert("Destructive commands are locked", isPresented: $showDestructiveConfirmation) {
+      Button("Keep Locked", role: .cancel) {
+        store.showDestructiveGate()
+      }
+    } message: {
+      Text("This surface records the gate only. No haptics, firmware, config, or reboot command is sent from this tap.")
+    }
+  }
+
+  private var movementPacketTestStatus: MoreStatusKind {
+    if model.movementPacketValidationIsRunning {
+      return .pending
+    }
+    if model.movementPacketValidationStatus.hasPrefix("Passed") {
+      return .ready
+    }
+    if model.movementPacketValidationStatus.hasPrefix("Failed") || model.movementPacketValidationStatus.hasPrefix("Connect WHOOP") {
+      return .blocked
+    }
+    return .pending
+  }
+
+  private var activityDetectorStatus: MoreStatusKind {
+    if model.activityDetectionStatus.contains("Candidate") || model.activityDetectionStatus.contains("Movement") {
+      return .ready
+    }
+    return packetMonitor.movementPacketStatus == "No movement packets" ? .pending : .ready
+  }
+
+  private var healthPacketCaptureStatus: MoreStatusKind {
+    if model.healthPacketCaptureSessionID != nil {
+      return .pending
+    }
+    if model.healthPacketCaptureStatus.hasPrefix("Stopped") {
+      return .ready
+    }
+    if model.healthPacketCaptureStatus.contains("failed") || model.healthPacketCaptureStatus.hasPrefix("Connect WHOOP") {
+      return .blocked
+    }
+    return .pending
+  }
+
+  private var healthPacketCaptureActionStatus: MoreStatusKind {
+    if model.healthPacketCaptureSessionID != nil {
+      return .pending
+    }
+    return model.ble.connectionState == "ready" ? .pending : .blocked
+  }
+
+  private var temperatureCaptureActionStatus: MoreStatusKind {
+    if model.healthPacketCaptureSessionID != nil {
+      return .blocked
+    }
+    if model.ble.connectionState != "ready" {
+      return .blocked
+    }
+    return model.ble.canSyncHistorical || model.ble.isHistoricalSyncing ? .pending : .stale
+  }
+
+  private var respiratoryPacketWatchStatus: MoreStatusKind {
+    if model.respiratoryPacketWatchActive {
+      return .pending
+    }
+    if model.respiratoryPacketWatchStatus.hasPrefix("Found K18") {
+      return .ready
+    }
+    if model.respiratoryPacketWatchStatus.hasPrefix("Connect WHOOP") {
+      return .blocked
+    }
+    if model.respiratoryPacketWatchStatus.hasPrefix("Timed out") {
+      return .stale
+    }
+    return model.ble.connectionState == "ready" ? .pending : .blocked
+  }
+
+  private func healthPacketFamilyStatus(_ family: HealthPacketCaptureFamily) -> MoreStatusKind {
+    switch family.status {
+    case .target:
+      return .ready
+    case .expected:
+      return .pending
+    case .unresolved:
+      return .stale
+    case .unknown:
+      return .blocked
+    }
+  }
+
+  private func healthPacketFamilyIcon(_ family: HealthPacketCaptureFamily) -> String {
+    switch family.status {
+    case .target:
+      return "scope"
+    case .expected:
+      return "waveform.path.ecg"
+    case .unresolved:
+      return "questionmark.diamond"
+    case .unknown:
+      return "questionmark.circle"
+    }
+  }
+
+  private func deviceSignalIcon(_ family: String) -> String {
+    switch family {
+    case "HR":
+      return "heart"
+    case "Motion", "R21 IMU":
+      return "figure.walk.motion"
+    case "K2":
+      return "dot.radiowaves.left.and.right"
+    case "K20", "K11":
+      return "waveform.path.ecg"
+    case "Optical":
+      return "waveform.path.ecg"
+    case "Pulse":
+      return "lungs"
+    case "Skin Temp":
+      return "thermometer.medium"
+    default:
+      return "waveform.path"
+    }
+  }
+}
+
+// MARK: - Research Tab
+
+private struct MoreDebugResearchTab: View {
+  @Environment(GooseAppModel.self) private var model
+  @ObservedObject var store: MoreDataStore
+  @AppStorage(OnboardingStorage.onboardingComplete) private var onboardingComplete = false
+  @AppStorage(OnboardingStorage.onboardingRedoRequested) private var onboardingRedoRequested = false
+
+  var body: some View {
+    List {
       Section("Research BT Commands") {
-        MoreInfoRow(
-          title: "Connection",
-          value: "\(model.ble.connectionState) | \(model.ble.activeDeviceName)",
-          systemImage: "sensor.tag.radiowaves.forward",
-          status: model.ble.connectionState == "ready" ? .ready : .blocked
-        )
         MoreInfoRow(
           title: "Last Result",
           value: model.ble.debugCommandStatus,
@@ -424,21 +603,6 @@ struct MoreDebugView: View {
         }
       }
 
-      Section("Command Shortcuts") {
-        ForEach(store.commandGroups) { group in
-          MoreCommandGroupRow(group: group)
-        }
-      }
-
-      Section("Protected Controls") {
-        Button {
-          showDestructiveConfirmation = true
-        } label: {
-          Label("Destructive Commands Locked", systemImage: "lock.shield")
-        }
-        MoreInfoRow(title: "Gate", value: store.destructiveGateStatus, systemImage: "lock", status: .blocked)
-      }
-
 #if DEBUG
       Section("Developer") {
         Button {
@@ -460,84 +624,6 @@ struct MoreDebugView: View {
 #endif
     }
     .gooseListBackground()
-    .navigationTitle("Debug")
-    .onAppear {
-      model.recordUIAction("page.opened", detail: "More Debug")
-      store.refreshBridgeStatus(model: model)
-    }
-    .alert("Destructive commands are locked", isPresented: $showDestructiveConfirmation) {
-      Button("Keep Locked", role: .cancel) {
-        store.showDestructiveGate()
-      }
-    } message: {
-      Text("This surface records the gate only. No haptics, firmware, config, or reboot command is sent from this tap.")
-    }
-  }
-
-  private var movementPacketTestStatus: MoreStatusKind {
-    if model.movementPacketValidationIsRunning {
-      return .pending
-    }
-    if model.movementPacketValidationStatus.hasPrefix("Passed") {
-      return .ready
-    }
-    if model.movementPacketValidationStatus.hasPrefix("Failed") || model.movementPacketValidationStatus.hasPrefix("Connect WHOOP") {
-      return .blocked
-    }
-    return .pending
-  }
-
-  private var activityDetectorStatus: MoreStatusKind {
-    if model.activityDetectionStatus.contains("Candidate") || model.activityDetectionStatus.contains("Movement") {
-      return .ready
-    }
-    return packetMonitor.movementPacketStatus == "No movement packets" ? .pending : .ready
-  }
-
-  private var healthPacketCaptureStatus: MoreStatusKind {
-    if model.healthPacketCaptureSessionID != nil {
-      return .pending
-    }
-    if model.healthPacketCaptureStatus.hasPrefix("Stopped") {
-      return .ready
-    }
-    if model.healthPacketCaptureStatus.contains("failed") || model.healthPacketCaptureStatus.hasPrefix("Connect WHOOP") {
-      return .blocked
-    }
-    return .pending
-  }
-
-  private var healthPacketCaptureActionStatus: MoreStatusKind {
-    if model.healthPacketCaptureSessionID != nil {
-      return .pending
-    }
-    return model.ble.connectionState == "ready" ? .pending : .blocked
-  }
-
-  private var temperatureCaptureActionStatus: MoreStatusKind {
-    if model.healthPacketCaptureSessionID != nil {
-      return .blocked
-    }
-    if model.ble.connectionState != "ready" {
-      return .blocked
-    }
-    return model.ble.canSyncHistorical || model.ble.isHistoricalSyncing ? .pending : .stale
-  }
-
-  private var respiratoryPacketWatchStatus: MoreStatusKind {
-    if model.respiratoryPacketWatchActive {
-      return .pending
-    }
-    if model.respiratoryPacketWatchStatus.hasPrefix("Found K18") {
-      return .ready
-    }
-    if model.respiratoryPacketWatchStatus.hasPrefix("Connect WHOOP") {
-      return .blocked
-    }
-    if model.respiratoryPacketWatchStatus.hasPrefix("Timed out") {
-      return .stale
-    }
-    return model.ble.connectionState == "ready" ? .pending : .blocked
   }
 
   private var debugCommandStatusKind: MoreStatusKind {
@@ -586,53 +672,6 @@ struct MoreDebugView: View {
       return "slider.horizontal.3"
     default:
       return "antenna.radiowaves.left.and.right"
-    }
-  }
-
-  private func healthPacketFamilyStatus(_ family: HealthPacketCaptureFamily) -> MoreStatusKind {
-    switch family.status {
-    case .target:
-      return .ready
-    case .expected:
-      return .pending
-    case .unresolved:
-      return .stale
-    case .unknown:
-      return .blocked
-    }
-  }
-
-  private func healthPacketFamilyIcon(_ family: HealthPacketCaptureFamily) -> String {
-    switch family.status {
-    case .target:
-      return "scope"
-    case .expected:
-      return "waveform.path.ecg"
-    case .unresolved:
-      return "questionmark.diamond"
-    case .unknown:
-      return "questionmark.circle"
-    }
-  }
-
-  private func deviceSignalIcon(_ family: String) -> String {
-    switch family {
-    case "HR":
-      return "heart"
-    case "Motion", "R21 IMU":
-      return "figure.walk.motion"
-    case "K2":
-      return "dot.radiowaves.left.and.right"
-    case "K20", "K11":
-      return "waveform.path.ecg"
-    case "Optical":
-      return "waveform.path.ecg"
-    case "Pulse":
-      return "lungs"
-    case "Skin Temp":
-      return "thermometer.medium"
-    default:
-      return "waveform.path"
     }
   }
 }

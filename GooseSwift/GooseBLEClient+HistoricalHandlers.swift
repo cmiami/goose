@@ -103,16 +103,26 @@ extension GooseBLEClient {
       "compact_raw_payloads": true,
       "active_device_id": deviceUUID as Any,
     ]
-    do {
-      _ = try historicalDirectWriteBridge.request(method: "capture.import_frame_batch", args: args)
-      record(
-        level: .debug,
-        source: "ble.sync",
-        title: "historical_sync.direct_write.flushed",
-        body: "count=\(frames.count) total=\(historicalManager.historicalPacketsReceivedThisSync)"
-      )
-    } catch {
-      record(level: .warn, source: "ble.sync", title: "historical_sync.direct_write.error", body: error.localizedDescription)
+    let totalCount = historicalManager.historicalPacketsReceivedThisSync
+    let bridge = historicalDirectWriteBridge
+    historicalWriteQueue.async { [weak self] in
+      do {
+        _ = try bridge.request(method: "capture.import_frame_batch", args: args)
+        let count = frames.count
+        DispatchQueue.main.async {
+          self?.record(
+            level: .debug,
+            source: "ble.sync",
+            title: "historical_sync.direct_write.flushed",
+            body: "count=\(count) total=\(totalCount)"
+          )
+        }
+      } catch {
+        let msg = error.localizedDescription
+        DispatchQueue.main.async {
+          self?.record(level: .warn, source: "ble.sync", title: "historical_sync.direct_write.error", body: msg)
+        }
+      }
     }
   }
 

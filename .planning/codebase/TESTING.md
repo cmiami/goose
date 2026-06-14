@@ -1,230 +1,251 @@
-# Testing
+---
+focus: quality
+last_mapped: 2026-06-13
+---
+# Testing Patterns
 
-**Analysis Date:** 2026-06-04
+**Analysis Date:** 2026-06-13
 
-## Test Coverage Summary
+## Test Framework
 
-| Area | Coverage |
-|------|----------|
-| Rust protocol parsing | Comprehensive — `Rust/core/tests/protocol_tests.rs` |
-| Rust bridge (all 58+ methods) | Comprehensive — `Rust/core/tests/bridge_tests.rs` (105 test functions) |
-| Rust metrics algorithms (HRV, Recovery, Sleep, Strain, Stress) | Comprehensive — `Rust/core/tests/metrics_tests.rs` (63 functions) |
-| Rust SQLite store (schema migrations, CRUD) | Comprehensive — `Rust/core/tests/store_tests.rs` (31 functions) |
-| Rust sleep validation | Comprehensive — `Rust/core/tests/sleep_validation_tests.rs` (96 functions) |
-| Rust performance budgets | Present — `Rust/core/tests/perf_budget_tests.rs` |
-| Rust property-based invariants | Present — `Rust/core/tests/property_tests.rs` |
-| Rust fixture index and parser fixtures | Present — `Rust/core/tests/fixture_tests.rs` |
-| Swift BLE types and generation derivation | Present — `GooseSwiftTests/GooseBLETypesTests.swift` (14 methods) |
-| Swift `WearableDescriptor` UUID matching | Present — `GooseSwiftTests/WearableDescriptorTests.swift` (8 methods) |
-| Swift `GooseUploadService.buildUploadPayload` | Present — `GooseSwiftTests/GooseUploadServiceTests.swift` (5 methods + 1 source assertion) |
-| Swift `GooseAppModel` (coordinator) | Not testable in XCTest — requires BLE hardware and `@MainActor`; noted in `GooseUploadServiceTests.swift` line 86 |
-| Swift `HealthDataStore` (query layer) | Not tested — requires Rust bridge and SQLite |
-| Swift `GooseRustBridge` (FFI) | Not tested via XCTest |
-| Swift UI views | Not tested — no snapshot or UI test target |
+**Swift (XCTest):**
+- Runner: XCTest (via Xcode test target `GooseSwiftTests`)
+- Config: `GooseSwiftTests/Info.plist`
+- No vitest, jest, or separate config file
+- Run: Build and test via Xcode or `xcodebuild test`
 
-## Swift Tests
-
-**Test target:** `GooseSwiftTests` (XCTest)
-- Defined in `GooseSwift.xcodeproj/project.pbxproj` as target `T50000000000000000000001`
-- Output product: `GooseSwiftTests.xctest`
-- **Note:** The `GooseSwift.xcscheme` TestAction `<Testables>` section is empty — the test target exists in the project but is not wired to the shared scheme's Run Tests action. Tests must be run by selecting the `GooseSwiftTests` target manually in Xcode.
-
-**Test files:**
-- `GooseSwiftTests/GooseBLETypesTests.swift` — 14 test methods, 30 Swift test functions
-- `GooseSwiftTests/WearableDescriptorTests.swift` — 8 test methods
-- `GooseSwiftTests/GooseUploadServiceTests.swift` — 5 behavioral tests + 1 source-level assertion (30 total XCT assertions)
-
-**Run command:**
+**Rust (cargo test):**
+- Runner: Cargo built-in test runner
+- Config: `Rust/core/Cargo.toml` (dev-dependency: `tempfile 3.13`)
+- Run commands:
 ```bash
-xcodebuild test -project GooseSwift.xcodeproj -scheme GooseSwift -destination 'platform=iOS Simulator,name=iPhone 16'
-# or select GooseSwiftTests target in Xcode and press Cmd+U
+cargo test --manifest-path Rust/core/Cargo.toml           # All tests
+cargo test --manifest-path Rust/core/Cargo.toml --test protocol_tests  # Single file
+cargo test --manifest-path Rust/core/Cargo.toml -- --nocapture          # With stdout
 ```
 
-**Import pattern:**
+## Test File Organization
+
+**Swift tests:**
+- Location: `GooseSwiftTests/` (flat directory, all at root)
+- Naming: `{Subject}Tests.swift` (e.g. `GooseBLETypesTests.swift`, `GooseUploadServiceTests.swift`)
+- Mocks/helpers: `MockRustBridge.swift`, `MockBLEClient.swift`, `MockHealthStore.swift`
+- Import pattern: `@testable import GooseSwift` on every test file
+
+**Rust integration tests:**
+- Location: `Rust/core/tests/` (flat directory, 44 files)
+- Naming: `{subject}_tests.rs` (snake_case, e.g. `bridge_tests.rs`, `protocol_tests.rs`)
+- No separate fixtures directory; fixture data embedded inline or referenced via `build_fixture_index()`
+
+## Test Counts
+
+| Layer | Test functions |
+|-------|---------------|
+| Swift (XCTest) | ~69 |
+| Rust integration (`Rust/core/tests/`) | ~792 `#[test]` functions |
+| Rust unit (inline `#[cfg(test)]` in `src/`) | ~161 `#[test]` occurrences |
+| **Total Rust** | **~953** |
+
+## Swift Test Structure
+
+**Suite organization:**
 ```swift
 import XCTest
-import CoreBluetooth          // only when testing BLE-related types
+import CoreBluetooth
 @testable import GooseSwift
-```
 
-**Test class pattern:**
-```swift
 final class GooseBLETypesTests: XCTestCase {
 
-  // MARK: - <group description>
+  // MARK: - Section name
 
   func testGenerationDerivation_gen4ServiceUUID() {
-    let generation = GooseBLEClient.generation(from: [gen4UUID])
-    XCTAssertEqual(generation, "4.0", "<failure message>")
+    let gen4ServiceUUID = CBUUID(string: "61080001-8d6d-82b8-614a-1c8cb0f8dcc6")
+    let generation = GooseBLEClient.generation(from: [gen4ServiceUUID])
+    XCTAssertEqual(generation, "4.0", "61080001 service UUID should derive generation 4.0")
   }
 }
 ```
 
-**Key characteristics:**
-- All test classes are `final class` conforming to `XCTestCase`
-- No `setUp`/`tearDown`/`setUpWithError` lifecycle methods — each test is self-contained
-- Instances of pure types created inline — `private let service = GooseUploadService(databasePath: "/dev/null")`
-- `XCTSkip` used in one case when a source file cannot be resolved from the test bundle sandbox
-- No mocking framework — only pure/static functions testable without BLE hardware
+**Key conventions:**
+- `final class` for all test classes
+- `// MARK: -` sections group related cases within a file
+- Every assertion includes a failure message string (third argument to `XCTAssertEqual`, etc.)
+- `func test_{thing}_{condition}()` naming pattern with underscores for readability
 
-**What cannot be tested via XCTest:**
-- `GooseAppModel` — requires `@MainActor` + CoreBluetooth hardware; explicitly documented in `GooseUploadServiceTests.swift`
-- `GooseRustBridge` — FFI calls require the compiled `libgoose_core.a` linked to the test target
-- Any `@MainActor` type that depends on a live `CBCentralManager`
+**MARK sections** are used consistently; see `GooseBLETypesTests.swift` and `GooseUploadServiceTests.swift`.
 
-**Source-level assertion pattern** (workaround for untestable behavior):
+## Mocking
+
+**Mock types (in `GooseSwiftTests/`):**
+
+`MockRustBridge` — implements `GooseRustBridging` protocol:
 ```swift
-// Walk up from bundle URL to find source file; read contents; assert no forbidden literal
-let sourceContent = try resolveUploadSourceContent()
-XCTAssertFalse(sourceContent.contains("deviceType: \"GOOSE\""), "...")
-// Falls back to XCTSkip when sandboxed
-```
-Used in `GooseUploadServiceTests.swift` to guard against a hardcoded device type regression.
+final class MockRustBridge: GooseRustBridging {
+  var lastMethod: String?
+  var lastArgs: [String: Any] = [:]
+  var stubbedResult: [String: Any] = [:]
+  var shouldThrow = false
 
-## Rust Tests
-
-**Runner:** `cargo test` (built-in)
-- Config: `Rust/core/Cargo.toml` — no separate test framework dependency (uses built-in Rust test harness)
-- Dev dependency: `tempfile = "3.13"` for temporary SQLite databases in tests
-- Working directory for tests: `Rust/core/` — relative paths like `Path::new("fixtures")` resolve from there
-
-**Run commands:**
-```bash
-cd Rust/core
-cargo test --locked                    # run all tests
-cargo test --locked --no-fail-fast     # as used in CI (continue past first failure)
-cargo test --lib --verbose             # lib unit tests only (CI MSRV job)
-cargo test <test_name>                 # single test by name
-cargo test -p goose-core               # explicit crate
-```
-
-**Test organization:**
-- **Integration tests** in `Rust/core/tests/` — 41 files, ~697 test functions total
-- **Inline unit tests** — 19 `#[test]` functions inside `#[cfg(test)]` modules in `src/` files
-- Each integration test file corresponds to one domain module
-
-**Integration test files and scope:**
-
-| File | Functions | Domain |
-|------|-----------|--------|
-| `bridge_tests.rs` | 105 | All bridge methods (JSON-RPC over FFI) |
-| `sleep_validation_tests.rs` | 96 | Sleep staging, window detection, release gate |
-| `metric_features_tests.rs` | 76 | Metric feature extraction |
-| `metrics_tests.rs` | 63 | HRV, Recovery, Sleep, Strain, Stress algorithms |
-| `command_tests.rs` | 59 | BLE command definitions and validation |
-| `export_tests.rs` | 47 | Export bundle structure and checksums |
-| `local_health_validation_suite_cli_tests.rs` | 46 | CLI tool contract |
-| `health_sync_tests.rs` | 40 | HealthKit dry-run sync |
-| `store_tests.rs` | 31 | SQLite schema, migrations, CRUD |
-| `history_sync_tests.rs` | 31 | Historical sync state machine |
-| `metric_feature_report_cli_tests.rs` | 26 | CLI report format |
-| `fixture_tests.rs` | 22 | Fixture index integrity and parser fixtures |
-| `activity_candidates_tests.rs` | 19 | Activity candidate classification |
-| `protocol_tests.rs` | 18 | Frame parsing, CRC, deframing |
-| `metric_readiness_tests.rs` | 17 | Metric readiness scoring |
-| `debug_ws_tests.rs` | 17 | WebSocket debug server |
-| `step_counter_tests.rs` | 15 | Step counting pipeline |
-| `reference_runner_cli_tests.rs` | 15 | Reference algorithm CLI runner |
-| `ui_coverage_tests.rs` | 13 | UI coverage audit |
-| `reference_tests.rs` | 12 | OpenWHOOP reference algorithm output |
-| `property_tests.rs` | ~8 | Property-based invariants (parser, deframer, algorithm bounds) |
-| `perf_budget_tests.rs` | 3 | Performance budget pass/fail |
-| `storage_check_tests.rs` | 3 | Storage self-test |
-| Others (algo_benchmark, calibration, capture_*, privacy_lint, etc.) | varies | Domain-specific |
-
-## Test Infrastructure
-
-**CI — Rust core (`.github/workflows/rust-core.yml`):**
-- `cargo fmt --all -- --check` — format gate (blocks merge on failure)
-- `cargo build --lib` + `cargo test --lib` on Ubuntu + macOS-15 matrix, at MSRV `1.96`
-- `cargo clippy --lib --no-deps -- -D warnings` — advisory only (`continue-on-error: true`)
-
-**CI — Rust core full test (`.github/workflows/rust-core-ci.yml`):**
-- `cargo build --all-targets --locked` + `cargo test --locked --no-fail-fast` on Ubuntu
-- Android cross-compile: `cargo ndk -t arm64-v8a build --release --lib`
-- Python3 available for reference algorithm adapters (NeuroKit2, pyHRV, pyActigraphy)
-
-**CI — Swift/iOS:**
-- No dedicated Swift CI workflow detected; iOS build requires macOS + Xcode and is not automated
-
-**Fixtures:**
-- Location: `Rust/core/fixtures/synthetic/` — `.hex` and `.json` pairs for parser testing
-- `Rust/core/fixtures/index.json` — machine-readable fixture index with checksums
-- Fixture JSON embedded in tests with `include_str!("../fixtures/synthetic/<file>.json")`
-- `build_fixture_index(Path::new("fixtures"))` function validates checksums at test time
-
-**Temporary databases:**
-- `tempfile::tempdir()` creates isolated SQLite databases per test
-- `GooseStore::open_in_memory()` used for pure algorithmic tests that need store but no persistence
-- `GooseStore::open(&path)` used when migration or schema tests need a real file
-
-**Bridge test helper:**
-```rust
-fn request(value: serde_json::Value) -> BridgeResponse {
-    serde_json::from_str(&handle_bridge_request_json(&value.to_string())).unwrap()
+  func request(method: String, args: [String: Any]) throws -> [String: Any] {
+    guard !shouldThrow else { throw MockError.forced }
+    lastMethod = method
+    lastArgs = args
+    return stubbedResult
+  }
 }
 ```
-Defined at the bottom of `Rust/core/tests/bridge_tests.rs` (line 8519). All bridge tests call through this helper.
+- `MockBLEClient.swift` — stub for `GooseBLEClient`
+- `MockHealthStore.swift` — delegates to `MockRustBridge`; used for `HealthDataStore` tests
 
-**Seed helper pattern:**
-```rust
-fn seed_recovery_calibration(db: &std::path::Path) {
-    let store = GooseStore::open(db).unwrap();
-    // insert algorithm definitions, calibration records, etc.
-}
-```
-Used to set up database state before testing bridge methods that require pre-existing data.
-
-## Coverage Gaps
-
-**Swift (high risk):**
-- `GooseAppModel` — the central coordinator is completely untested; all BLE pipeline logic, overnight guard, and activity recording are uncovered
-- `HealthDataStore` — all metric query extensions are untested
-- `GooseRustBridge` — the FFI call/response cycle is not tested from Swift
-- All SwiftUI views — no UI or snapshot tests exist
-- `GooseUploadService.triggerManualUpload` — only guarded by a source-level assertion, not a behavioral test
-
-**Swift (medium risk):**
-- `CaptureFrameWriteQueue`, `OvernightSQLiteMirrorQueue` — queue-protected insert logic untested
-- `NotificationFrameParser`, `WhoopDataSignalPipeline` — pipeline entry points untested
-
-**Rust (low risk — well covered):**
-- Rust core has broad coverage across all major modules
-- `algo_benchmark_tests.rs` and `calibration_tests.rs` test less-frequently-exercised paths
-- No explicit coverage measurement tooling configured (no `tarpaulin` or similar in `Cargo.toml`)
-
-## Testing Conventions
-
-**Rust test naming:**
-- Descriptive `snake_case` function names that state the invariant — not `test_foo` prefix
-- Examples: `parses_hand_derived_goose_v5_get_hello_frame`, `goose_hrv_v0_pnn50_uses_strictly_greater_than_50_ms`, `deframer_reassembles_split_v5_frame_and_drops_prefix_noise`
-- `#[test]` attribute immediately before `fn`; no grouping struct or test runner macro
-
-**Swift test naming:**
-- Method names use `test` prefix (XCTest requirement) then a snake-like description
-- Examples: `testGenerationDerivation_gen4ServiceUUID`, `test_buildUploadPayload_gen4_hasGeneration4_noDeviceClass`, `test_rustDeviceType_2A37_full128bit_returnsHRMonitor`
-- `// MARK: - <group>` used to group related test methods within a class
-
-**Rust assertion patterns:**
-```rust
-assert!(response.ok, "{:?}", response.error);  // pass error context on failure
-assert_eq!(output.algorithm_id, GOOSE_HRV_V0_ID);
-assert_close(output.mean_nn_ms, 800.0);  // local helper for f64 epsilon comparison
-
-fn assert_close(actual: f64, expected: f64) {
-    assert!((actual - expected).abs() < 1e-6, "expected {expected}, got {actual}");
-}
-```
-
-**Swift assertion patterns:**
+**URL mocking for network tests:**
 ```swift
-XCTAssertEqual(generation, "4.0", "61080001 service UUID should derive generation 4.0")
-XCTAssertNil(payload["device_class"], "GEN4 payload must NOT carry device_class")
-XCTAssertFalse(condition, "<explanation of required invariant>")
-// All XCTAssert calls include a human-readable failure message as the last argument
+private final class MockURLProtocol: URLProtocol {
+  static var handler: ((URLRequest) -> (HTTPURLResponse, Data?))?
+  // ...
+}
+// Configure via URLSessionConfiguration.ephemeral with protocolClasses
+```
+Used in `GooseUploadServiceTests.swift` for HTTP retry logic.
+
+**What to mock:**
+- `GooseRustBridging` protocol when testing Swift logic that calls the bridge
+- `URLProtocol` subclass for HTTP layer tests
+- `GooseBLEClient` for callers that depend on BLE state
+
+**What NOT to mock:**
+- The real `GooseRustBridge` when testing bridge method routing (use actual Rust bridge with a temp DB)
+- SQLite — Rust tests use `GooseStore::open_in_memory()` directly
+
+## Rust Test Patterns
+
+**In-memory store (preferred for Rust tests):**
+```rust
+let store = GooseStore::open_in_memory().unwrap();
+store.migrate().unwrap();
+```
+Note: `open_for_testing()` does not exist. Always use `open_in_memory()`. File-backed temp stores only when testing file-specific behaviour.
+
+**Integration test structure:**
+```rust
+#[test]
+fn parses_hand_derived_goose_v5_get_hello_frame() {
+    let parsed = parse_frame_hex(DeviceType::Goose, GET_HELLO_FRAME).unwrap();
+    assert_eq!(parsed.raw_len, 16);
+    assert!(parsed.header_crc_valid);
+}
 ```
 
-**What gets mocked:**
-- Nothing — both Swift and Rust tests use real types with real inputs
-- Swift tests only cover pure static/instance methods that do not require hardware or background actors
-- Rust tests use in-memory or temp-file databases; `GooseStore::open_in_memory()` substitutes for the real file
+**Bridge JSON tests:**
+```rust
+#[test]
+fn bridge_returns_core_version_payload() {
+    let response = request(serde_json::json!({
+        "schema": "goose.bridge.request.v1",
+        "request_id": "version-1",
+        "method": "core.version",
+        "args": {}
+    }));
+    // assert response fields
+}
+```
+
+**Fixture data:**
+- Hex frame constants defined as `const` at the top of each test file
+- `build_fixture_index()` / `import_fixture_index()` for larger fixture sets
+
+## Swift Test Types and Coverage
+
+**What is tested:**
+
+| File | Coverage area |
+|------|--------------|
+| `GooseBLETypesTests.swift` | BLE UUID → generation derivation, `rustDeviceType` property, `WearableDescriptor` |
+| `GooseUploadServiceTests.swift` | `buildUploadPayload` payload fields, HTTP retry logic (503/200), source-level assertion against hardcoded literals |
+| `HRMonitorStateTests.swift` | `GooseBLEClient` default state, `@Published` property assignment |
+| `TrendsFetchTests.swift` | `HealthDataStore.fetchTrendsSeries` bridge method routing |
+| `WorkoutEntryTests.swift` | Workout data model |
+| `WorkoutLiveActivityAttributesTests.swift` | `ActivityAttributes` shared type |
+| `CoachProviderTests.swift`, `ClaudeProviderTests.swift`, `GeminiProviderTests.swift` | AI coach provider logic |
+| `CoachProviderRegistryTests.swift` | Provider registry |
+| `CoachKeychainTests.swift` | Keychain read/write |
+| `HistoricalRangeParsingTests.swift` | Historical date range parsing |
+| `BaselineProgressTests.swift` | Baseline progress computation |
+| `TemperatureFormattingTests.swift` | Temperature unit formatting |
+| `CustomEndpointProviderTests.swift` | Custom server endpoint validation |
+| `WearableDescriptorTests.swift` | Descriptor matching |
+
+**What is NOT tested in Swift:**
+
+- `GooseAppModel` — cannot be instantiated in unit tests (requires BLE hardware and `@MainActor`); source-level assertions used as workaround (see `GooseUploadServiceTests`)
+- `GooseRustBridge` FFI layer — covered by Rust tests; not duplicated in Swift
+- UI views — no XCTest UI tests; simulator-driven testing is manual
+- `OvernightSQLiteMirrorQueue`, `CaptureFrameWriteQueue` — not unit-tested
+- `WhoopDataSignalPipeline`, `PassiveActivityDetectionPipeline` — not unit-tested
+- `WorkoutLiveActivityController` — no tests
+
+## Rust Test Coverage
+
+**Rust integration test files (44 total in `Rust/core/tests/`):**
+
+| File | Domain |
+|------|--------|
+| `protocol_tests.rs` | Frame parsing, CRC, payload decoding |
+| `bridge_tests.rs` | JSON bridge routing, all bridge methods |
+| `store_tests.rs` | SQLite schema migrations, CRUD operations |
+| `metrics_tests.rs` | Metric algorithms |
+| `metric_features_tests.rs` | Feature extraction from decoded frames |
+| `export_tests.rs` | ZIP export, SHA-256 checksums |
+| `capture_import_tests.rs` | BLE frame import |
+| `capture_correlation_tests.rs` | Frame correlation logic |
+| `capture_sanitize_tests.rs` | Input sanitization |
+| `sleep_validation_tests.rs` | Sleep scoring |
+| `energy_rollup_tests.rs` | Energy/calorie estimation |
+| `history_sync_tests.rs` | Historical sync |
+| `health_sync_tests.rs` | HealthKit boundary |
+| `step_counter_tests.rs`, `step_motion_estimator_tests.rs` | Step counting |
+| `exercise_detection_tests.rs` | Auto-detection of workouts |
+| `activity_identity_tests.rs`, `activity_candidates_tests.rs` | Activity session logic |
+| `timeline_tests.rs` | Timeline queries |
+| `calibration_tests.rs` | Calibration algorithms |
+| `algorithm_compare_tests.rs`, `reference_tests.rs` | Algorithm vs. Python reference |
+| `property_tests.rs` | Property-based tests |
+| `perf_budget_tests.rs` | Performance regression tests |
+| `privacy_lint_tests.rs` | Privacy constraint checks |
+| `debug_ws_tests.rs` | WebSocket debug server |
+| `command_tests.rs` | BLE command framing |
+| `fixture_tests.rs` | Fixture loading |
+| `v24_biometric_bridge_tests.rs`, `v24_biometric_protocol_tests.rs` | v24 biometric packets |
+| `heart_rate_gatt_protocol_tests.rs` | HR GATT protocol |
+| CLI test files (`*_cli_tests.rs`) | CLI tool integration |
+
+## Async Testing (Swift)
+
+**Pattern for async test methods:**
+```swift
+func test_upload503_leavesSynced0() async throws {
+    // ...
+    try? await Task.sleep(nanoseconds: 8_000_000_000)
+    XCTAssertEqual(MockURLProtocol.requestCount, 3, "...")
+}
+```
+- `async throws` test methods used when testing `async` upload/network flows
+- `XCTSkip` thrown when test preconditions cannot be met (e.g. empty temp DB, sandboxed CI)
+
+## Test Coverage Gaps
+
+**High priority:**
+- `GooseAppModel` — all coordinator logic untested at unit level; relies on integration/manual testing
+- `OvernightSQLiteMirrorQueue` — overnight guard logic has no automated tests
+- `PassiveActivityDetectionPipeline` — heuristic detection logic untested in Swift
+
+**Medium priority:**
+- `GooseBLEClient` parsing and command logic — only default-state properties tested; GATT protocol parsing untested from Swift
+- `CaptureFrameWriteQueue` — batched insert logic untested
+
+**Low priority (covered by Rust):**
+- Bridge method routing — thoroughly covered in `Rust/core/tests/bridge_tests.rs`
+- Protocol frame parsing — thoroughly covered in `Rust/core/tests/protocol_tests.rs`
+
+---
+
+*Testing analysis: 2026-06-13*

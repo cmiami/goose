@@ -217,7 +217,111 @@ extension HealthDataStore {
 
     let imported = buildImportSummary(result)
     hkImportStatus = imported
+
+    // Persist to SQLite so data survives app relaunch
+    await persistHealthKitToSQLite(result)
   }
+
+  func loadPersistedHealthKitData() async {
+    let db = databasePath
+    let df = Self.hkDateFormatter
+    let today = df.string(from: Date())
+    let startDate = df.string(from: Date().addingTimeInterval(-90 * 24 * 60 * 60))
+    let source = "apple.health"
+
+    func queryLatest(_ metric: String) async -> Double? {
+      guard
+        let rows = try? await bridge.requestAsync(
+          method: "metric_series.query_range",
+          args: ["database_path": db, "metric_name": metric, "start_date": startDate, "end_date": today, "source": source]
+        ),
+        let arr = rows["rows"] as? [[String: Any]],
+        let last = arr.last,
+        let value = last["value"] as? Double
+      else { return nil }
+      return value
+    }
+
+    func queryHistory(_ metric: String) async -> [(value: Double, date: Date)] {
+      guard
+        let rows = try? await bridge.requestAsync(
+          method: "metric_series.query_range",
+          args: ["database_path": db, "metric_name": metric, "start_date": startDate, "end_date": today, "source": source]
+        ),
+        let arr = rows["rows"] as? [[String: Any]]
+      else { return [] }
+      return arr.compactMap { row -> (Double, Date)? in
+        guard let value = row["value"] as? Double, let dateStr = row["date"] as? String,
+              let date = df.date(from: dateStr) else { return nil }
+        return (value, date)
+      }
+    }
+
+    async let rhr = queryLatest("hk.resting_hr_bpm")
+    async let hrv = queryLatest("hk.hrv_sdnn_ms")
+    async let resp = queryLatest("hk.respiratory_rate")
+    async let spo2 = queryLatest("hk.spo2_percent")
+    async let skinTemp = queryLatest("hk.skin_temp_delta_c")
+    async let stepsVal = queryLatest("hk.steps")
+    async let kcal = queryLatest("hk.active_kcal")
+    async let rhrHist = queryHistory("hk.resting_hr_bpm")
+    async let hrvHist = queryHistory("hk.hrv_sdnn_ms")
+
+    let (rhrV, hrvV, respV, spo2V, skinTempV, stepsV, kcalV, rhrH, hrvH) =
+      await (rhr, hrv, resp, spo2, skinTemp, stepsVal, kcal, rhrHist, hrvHist)
+
+    if let v = rhrV, hkRestingHR == nil { hkRestingHR = v }
+    if let v = hrvV, hkHRVSDNNMs == nil { hkHRVSDNNMs = v }
+    if let v = respV, hkRespiratoryRate == nil { hkRespiratoryRate = v }
+    if let v = spo2V, hkSpO2Percent == nil { hkSpO2Percent = v }
+    if let v = skinTempV, hkSkinTempDeltaC == nil { hkSkinTempDeltaC = v }
+    if let v = stepsV, hkSteps == nil { hkSteps = Int(v) }
+    if let v = kcalV, hkActiveKcal == nil { hkActiveKcal = v }
+    if hkRHRHistory.isEmpty, !rhrH.isEmpty { hkRHRHistory = rhrH.map { (bpm: $0.value, date: $0.date) } }
+    if hkHRVHistory.isEmpty, !hrvH.isEmpty { hkHRVHistory = hrvH.map { (sdnn: $0.value, date: $0.date) } }
+
+    if hkRestingHR != nil || hkHRVSDNNMs != nil {
+      hkImportStatus = "Restored from local DB"
+    }
+  }
+
+  private func persistHealthKitToSQLite(_ result: HealthKitFullImportResult) async {
+    let db = databasePath
+    let df = Self.hkDateFormatter
+    let today = df.string(from: Date())
+    let source = "apple.health"
+
+    func upsertMetric(_ metric: String, date: String, value: Double) async {
+      _ = try? await bridge.requestAsync(
+        method: "metric_series.upsert",
+        args: ["database_path": db, "source": source, "metric_name": metric, "date": date, "value": value]
+      )
+    }
+
+    // Today's snapshot
+    if let v = result.restingHR { await upsertMetric("hk.resting_hr_bpm", date: today, value: v) }
+    if let v = result.hkHRVSDNNMs { await upsertMetric("hk.hrv_sdnn_ms", date: today, value: v) }
+    if let v = result.respiratoryRate { await upsertMetric("hk.respiratory_rate", date: today, value: v) }
+    if let v = result.spO2Percent { await upsertMetric("hk.spo2_percent", date: today, value: v) }
+    if let v = result.skinTempDeltaC { await upsertMetric("hk.skin_temp_delta_c", date: today, value: v) }
+    if let v = result.steps { await upsertMetric("hk.steps", date: today, value: Double(v)) }
+    if let v = result.activeKcal { await upsertMetric("hk.active_kcal", date: today, value: v) }
+
+    // 90-day history
+    for entry in result.rhrHistory {
+      await upsertMetric("hk.resting_hr_bpm", date: df.string(from: entry.date), value: entry.bpm)
+    }
+    for entry in result.hrvHistory {
+      await upsertMetric("hk.hrv_sdnn_ms", date: df.string(from: entry.date), value: entry.sdnn)
+    }
+  }
+
+  private nonisolated static let hkDateFormatter: DateFormatter = {
+    let df = DateFormatter()
+    df.dateFormat = "yyyy-MM-dd"
+    df.locale = Locale(identifier: "en_US_POSIX")
+    return df
+  }()
 
   private func buildImportSummary(_ r: HealthKitFullImportResult) -> String {
     var parts: [String] = []

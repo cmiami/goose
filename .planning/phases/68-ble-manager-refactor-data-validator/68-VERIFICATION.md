@@ -2,19 +2,21 @@
 phase: 68-ble-manager-refactor-data-validator
 verified: 2026-06-12T00:00:00Z
 status: human_needed
-score: 8/9 must-haves verified
-overrides_applied: 0
+score: 9/9 must-haves verified
+overrides_applied: 1
 overrides:
   - must_have: "A GooseBLEDataValidator struct rejects structurally invalid BLE frames before the Rust bridge is called"
     reason: "Implemented as final class instead of struct — functionally identical (3 structural invariants, OSLog warnings, callback wiring all present). final class was required because let dataValidator = GooseBLEDataValidator() demands a reference type for mutable onInvalidFrame closure. The observable behaviour is unchanged."
-    accepted_by: ""
-    accepted_at: ""
+    accepted_by: "tigercraft4"
+    accepted_at: "2026-06-13T15:00:00Z"
 human_verification:
   - test: "Open More > Debug no simulador"
     expected: "Linha 'Invalid Frames' mostra '0 rejected this session' com ícone xmark.circle"
+    result: "PASS — row visible in Health Packet Capture section, shows '0 rejected this session', green Pronto badge (2026-06-13 simulator)"
     why_human: "UI rendering e localização da row no ecrã não verificável por grep"
   - test: "Trigger a historical sync in the simulator (connect to a WHOOP device or mock)"
     expected: "Sync completes without crash; historical packet count increments; sync status transitions syncing → synced"
+    result: "BLOCKED — requires live BLE device; not testable in simulator"
     why_human: "State machine behaviour through BLE callbacks requires live device or simulator test; cannot be confirmed by static analysis"
 ---
 

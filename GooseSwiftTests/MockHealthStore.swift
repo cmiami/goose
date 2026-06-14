@@ -17,10 +17,15 @@ final class MockHealthStore: HealthDataStoring {
     formatter.dateFormat = "yyyy-MM-dd"
     let endDate = formatter.string(from: Date())
     let startDate = formatter.string(from: Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date())
-    _ = try await bridge.requestAsync(
+    let result = try await bridge.requestAsync(
       method: "metric_series.query_range",
       args: ["database_path": databasePath, "metric_name": metricName, "start_date": startDate, "end_date": endDate]
     )
-    return []
+    let rows = result["rows"] as? [[String: Any]] ?? []
+    return rows.compactMap { row in
+      guard let date = row["date"] as? String,
+            let value = row["value"] as? Double else { return nil }
+      return (date: date, value: value)
+    }
   }
 }

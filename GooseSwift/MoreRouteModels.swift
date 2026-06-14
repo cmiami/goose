@@ -36,7 +36,7 @@ enum MoreRoute: String, CaseIterable, Identifiable, Hashable {
     case .debug: String(localized: "Debug")
     case .privacy: String(localized: "Privacy")
     case .remoteServer: String(localized: "Remote Server")
-    case .support: String(localized: "Support")
+    case .support: String(localized: "Logs & Export")
     case .about: String(localized: "About")
     case .developer: String(localized: "Developer")
     case .breathe: String(localized: "Breathe")
@@ -59,7 +59,7 @@ enum MoreRoute: String, CaseIterable, Identifiable, Hashable {
     case .debug: String(localized: "Rust, parser, command groups, and gated controls")
     case .privacy: String(localized: "Local data, export, lint, and deletion state")
     case .remoteServer: String(localized: "Server URL, API key, and upload toggle")
-    case .support: String(localized: "Logs, support bundles, and troubleshooting")
+    case .support: String(localized: "Logs, export bundles, and troubleshooting")
     case .about: String(localized: "App, Rust core, and licenses")
     case .developer: String(localized: "Capture, exports, bridge diagnostics, and debug tools")
     case .breathe: String(localized: "Paced breathing with haptics")
@@ -117,8 +117,8 @@ enum MoreRoute: String, CaseIterable, Identifiable, Hashable {
   static let deviceRoutes: [MoreRoute] = [.device, .hrMonitor]
   static let appRoutes: [MoreRoute] = [.healthSync]
   static let settingsRoutes: [MoreRoute] = [.privacy, .remoteServer]
-  static let supportRoutes: [MoreRoute] = [.support, .about]
-  static let developerRoutes: [MoreRoute] = [.developer]
+  static let supportRoutes: [MoreRoute] = [.about]
+  static let developerRoutes: [MoreRoute] = [.support, .developer]
   static let developerToolRoutes: [MoreRoute] = [.connectionLab, .capture, .localStore, .rawExport, .algorithms, .debug]
   static let wellnessRoutes: [MoreRoute] = [.breathe, .intervalTimer]
   static let dataRoutes: [MoreRoute] = [.metricExplorer]

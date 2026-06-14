@@ -308,6 +308,7 @@ import OSLog
   var syncClearWorkItem: DispatchWorkItem?
   let historicalDirectWriteBridge = GooseRustBridge()
   var historicalDirectWriteDatabasePath: String = ""
+  let historicalWriteQueue = DispatchQueue(label: "com.goose.swift.historical-write", qos: .utility)
   var lastHeartRateLogAt: Date?
   var lastHeartRateLogBPM: Int?
   var lastHeartRateLogSource = ""
@@ -343,9 +344,12 @@ import OSLog
   var pendingDebugCommands: [UInt8: PendingDebugCommand] = [:]
   var debugCommandTimeoutWorkItems: [UInt8: DispatchWorkItem] = [:]
   var nextDebugCommandSequence: UInt8 = 120
+  var nextHapticCommandSequence: UInt8 = 144
   var highFrequencyHistorySyncRequestedExpiry: Date?
   var debugSkinTemperatureCommandSent = false
   var debugSkinTemperatureCommandWorkItem: DispatchWorkItem?
+  // BLE-REL-01: tracks whether a single auth retry is already pending. Reset on connect/disconnect.
+  var authRetryPending = false
 
   enum DefaultsKey {
     static let rememberedDeviceID = "goose.swift.rememberedDeviceID"

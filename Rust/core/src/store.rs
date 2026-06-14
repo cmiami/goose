@@ -11,7 +11,7 @@ use crate::{
     validation_labels::OFFICIAL_WHOOP_LABEL_POLICY,
 };
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 20;
+pub const CURRENT_SCHEMA_VERSION: i64 = 21;
 pub const DEFAULT_RAW_EVIDENCE_PAYLOAD_RETENTION_LIMIT_BYTES: i64 = 512 * 1024 * 1024;
 
 const ALLOWED_METRIC_SOURCE_KINDS: [&str; 4] = [
@@ -1826,6 +1826,11 @@ impl GooseStore {
                 UNIQUE(source, metric_name, date)
             );
 
+            CREATE INDEX IF NOT EXISTS idx_metric_series_lookup ON metric_series (source, metric_name, date);
+            CREATE INDEX IF NOT EXISTS idx_journal_date ON journal (date);
+            CREATE INDEX IF NOT EXISTS idx_workout_date ON workout (date);
+            CREATE INDEX IF NOT EXISTS idx_apple_daily_date ON apple_daily (date);
+
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (1);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (2);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (3);
@@ -1847,7 +1852,7 @@ impl GooseStore {
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (19);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (20);
             INSERT OR IGNORE INTO goose_schema_migrations(version) VALUES (21);
-            PRAGMA user_version = 20;
+            PRAGMA user_version = 21;
             "#,
         )?;
         self.ensure_raw_evidence_columns()?;
@@ -9262,8 +9267,8 @@ mod exercise_session_tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("failed to read user_version");
         assert_eq!(
-            version, 20,
-            "PRAGMA user_version should be 20 after v20 migration"
+            version, 21,
+            "PRAGMA user_version should be 21 after v21 migration"
         );
     }
 
@@ -9352,9 +9357,9 @@ mod sync_schema_tests {
     }
 
     #[test]
-    fn test_schema_version_is_20() {
+    fn test_schema_version_is_21() {
         let store = make_store();
-        assert_eq!(store.schema_version().unwrap(), 20);
+        assert_eq!(store.schema_version().unwrap(), 21);
     }
 
     #[test]
@@ -9964,15 +9969,15 @@ mod v20_migration_tests {
     }
 
     #[test]
-    fn test_schema_version_is_20() {
+    fn test_schema_version_is_21() {
         let store = open_migrated_store();
         let version: i64 = store
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("user_version");
         assert_eq!(
-            version, 20,
-            "PRAGMA user_version must be 20 after migration"
+            version, 21,
+            "PRAGMA user_version must be 21 after migration"
         );
     }
 

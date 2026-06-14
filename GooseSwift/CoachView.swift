@@ -783,12 +783,17 @@ enum DailyJournalStore {
     return entries
   }
 
-  static func save(_ entry: DailyJournalEntry) {
+  static func save(_ entry: DailyJournalEntry) throws {
     var all = load()
     all[entry.dateKey] = entry
-    if let data = try? JSONEncoder().encode(all) {
-      UserDefaults.standard.set(data, forKey: key)
-    }
+    // Retain only the most recent 90 days to prevent unbounded growth
+    let cutoff = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date()
+    let fmt = DateFormatter()
+    fmt.dateFormat = "yyyy-MM-dd"
+    let cutoffKey = fmt.string(from: cutoff)
+    all = all.filter { $0.key >= cutoffKey }
+    let data = try JSONEncoder().encode(all)
+    UserDefaults.standard.set(data, forKey: key)
   }
 
   static func today() -> DailyJournalEntry? {
@@ -800,6 +805,7 @@ struct DailyJournalSheet: View {
   @Environment(\.dismiss) private var dismiss
   @State private var text: String
   @State private var selectedTags: Set<String>
+  @State private var saveError: String? = nil
   private let dateKey: String
 
   init(existing: DailyJournalEntry?) {
@@ -869,6 +875,14 @@ struct DailyJournalSheet: View {
     }
     .presentationDetents([.medium, .large])
     .presentationDragIndicator(.visible)
+    .alert("Não foi possível guardar", isPresented: Binding(
+      get: { saveError != nil },
+      set: { if !$0 { saveError = nil } }
+    )) {
+      Button("OK", role: .cancel) { saveError = nil }
+    } message: {
+      Text(saveError ?? "")
+    }
   }
 
   private var formattedDate: String {
@@ -883,8 +897,12 @@ struct DailyJournalSheet: View {
       text: text.trimmingCharacters(in: .whitespacesAndNewlines),
       tags: Array(selectedTags).sorted()
     )
-    DailyJournalStore.save(entry)
-    dismiss()
+    do {
+      try DailyJournalStore.save(entry)
+      dismiss()
+    } catch {
+      saveError = error.localizedDescription
+    }
   }
 }
 

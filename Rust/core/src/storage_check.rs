@@ -127,7 +127,24 @@ pub fn check_storage_database(options: StorageCheckOptions<'_>) -> GooseResult<S
     }
 
     let self_test = if options.run_self_test {
-        let report = run_storage_self_test(&store);
+        // The production store is opened read-only (when the DB already exists) for
+        // schema/integrity inspection. The self-test inserts synthetic rows, so it must
+        // use a separate writable in-memory store — writing to the read-only handle would
+        // fail with SQLITE_READONLY and report every self-test boolean as false, producing
+        // a misleading "FAIL" on a perfectly healthy database.
+        let report = match GooseStore::open_in_memory() {
+            Ok(test_store) => run_storage_self_test(&test_store),
+            Err(e) => StorageSelfTestReport {
+                ran: false,
+                raw_inserted: false,
+                raw_idempotent: false,
+                decoded_inserted: false,
+                query_roundtrip: false,
+                foreign_key_rejected: false,
+                issues: vec![format!("cannot open in-memory store: {e}")],
+                next_actions: vec![],
+            },
+        };
         if !report.issues.is_empty() {
             issues.extend(
                 report

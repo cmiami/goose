@@ -1974,7 +1974,8 @@ pub(crate) fn parse_rfc3339_utc_unix_ms(value: &str) -> Option<i64> {
     let second = second_text.parse::<u32>().ok()?;
     let millis = parse_millis_fraction(fraction_text)?;
     if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
+        || day == 0
+        || day > days_in_month(year, month)
         || hour > 23
         || minute > 59
         || second > 59
@@ -2004,6 +2005,18 @@ fn parse_millis_fraction(value: &str) -> Option<u32> {
         factor /= 10;
     }
     Some(millis)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+            if leap { 29 } else { 28 }
+        }
+        _ => 0,
+    }
 }
 
 fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {

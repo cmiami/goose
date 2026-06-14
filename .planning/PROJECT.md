@@ -10,6 +10,8 @@ v4.0 delivered: URL scheme security (deep link guard), full `@Observable` migrat
 v5.0 shipped (2026-06-08): Validated algorithm pipeline — HRV (BLE-gap-aware RMSSD + Lipponen-Tarvainen filter), Sleep staging (Cole-Kripke scale=0.001 + 4-class), Strain/Calories (Ghidra-confirmed Keytel/H-B coefficients), V24 biometric decode (SpO2/skin_temp/resp/gravity2), Exercise detection (retroactive, Karvonen zones), Upload sync (synced flag + cursors), Readiness Engine (ACWR + Foster monotony). Schema v19. 128 Rust tests. 9 audit HIGH findings fixed.
 v6.0 shipped (2026-06-09): All v5.0 Rust algorithms wired to SwiftUI dashboards — Readiness Engine, Sleep Staging (4-class hypnogram + AASM), V24 Biometrics, Exercise Sessions, Upload Sync UI, IMU Step Detection. Algorithm alignment: recovery Z-score weights, EWMA 14-night alpha, Cole-Kripke 30s epochs. Raw BLE frame upload/import (trust-chain). Test Connection + Import do servidor UI. 0 untranslated pt-PT strings.
 v7.0 shipped (2026-06-10): Sync correctness + async migration — upload route pair complete (POST /v1/ingest-frames + GET export), device_uuid end-to-end (CoreBluetooth → SQLite → server), upload sync race fix (pre-capture rowIDs), HealthDataStore full async/await migration (60+ calls, GCD removed), morning band sleep sync (gravity K18/K24 extraction → Cole-Kripke → external_sleep_sessions). Algorithm defaults promoted to v1. Phase 51 (real-device validation) deferred — hardware gate.
+v10.0 shipped (2026-06-13): Protocol parity + haptics + feature completeness — WHOOP 5.0 BLE manager refactor (GooseBLEHistoricalManager + GooseBLEDataValidator), haptic buzz primitive (cmd 0x13), BreatheView, Coach VOW nudges, Interval Timer, iOS notifications (sleep/workout/battery), HR decimation, Stress/ANS + Trends + Manual Workout screens, service layer protocols + mocks, smart alarm UI (HAP-03), wake-window RE-gated stub. Schema v20 (4 new SQLite tables). Code review fixes across 3 phases.
+v11.0 shipped (2026-06-14): PR integration + code health + app polish — 7 fork PRs integrated (units, localisation, UUID hiding, ChatGPT auth, firmware recovery, warm-up progress, sync donut), 4 upstream PRs merged (main-thread offload, async FFI, scroll jitter fix), full codebase audit (7 documents + CRITICAL findings resolved), schema v21 indexes, lazy init, BLE auth retry (SEED-001), Debug 3-tab split, Logs & Export, Breathe haptics, live strain tile, resting HR floor (30 bpm), R22 battery display, HealthKit SQLite persistence.
 
 ## Core Value
 
@@ -116,24 +118,35 @@ The user must be able to capture WHOOP data on iPhone and have it persisted auto
 - ✓ GooseHRSanitizer: HR spike filter 25–220 BPM; onHRSpike callback; hrSpikeCount @MainActor — v9.0 (HR-SAN-01)
 - ✓ StateMachine<State: Hashable, Event> generic type; GooseBLEBondingState migrated to Hashable — v9.0 (SM-01)
 
-### Active (v10.0 — Protocol Parity, Haptics & Feature Completeness)
+### Validated (v10.0)
 
-- [ ] BLE5-01: WHOOP 5.0 R22 packet parsing — fix missing metrics for WHOOP 5.0 users (issue #92)
-- [ ] BLE5-02: V18 per-second historical decode + stale-clock dedup
-- [ ] BLE5-03: GooseBLEHistoricalManager dedicated class — decouple historical sync from GooseBLEClient
-- [ ] BLE5-04: Swift-side BLE data validator before Rust/SQLite ingestion
-- [ ] HAP-01: buzz(loops:) primitive via cmd 0x13 — prerequisite for all haptic features
-- [ ] HAP-02: Breathe screen + AdvancedHaptic/HapticHeartbeat paced vibration
-- [ ] HAP-03: Smart alarm via BLE-commanded strap vibration
-- [ ] HAP-04: Wake-window engine: sleep state polling + autonomous haptic at optimal moment
-- [ ] FEAT-01: Coach VOW messages — contextual nudges computed from bridge data in Coach tab
-- [ ] FEAT-02: NoopApp features: Breathe UI, Interval Timer, Metric Explorer
-- [ ] FEAT-03: iOS local notifications: sleep summary, workout detection, WHOOP battery
-- [ ] DATA-01: 4 SQLite tables: journal (daily behaviours), workout (sport-tagged log), appleDaily (HealthKit provenance), metricSeries (schema-free)
-- [ ] DATA-02: Realtime strain accumulation — live Swift-side accumulator mirroring WHPBiotelemetry
-- [ ] DATA-03: Stress/ANS view, Long-range Trends dashboard, Manual Workout Entry (3 SwiftUI screens)
-- [ ] DATA-04: HR sample decimation for HeartRateSeriesStore (memory + chart performance)
-- [ ] ARCH-01: Protocol-based service layer + mock infrastructure for unit testing
+- ✓ BLE5-03: GooseBLEHistoricalManager dedicated class — historical sync decoupled from GooseBLEClient — v10.0 (Phase 68)
+- ✓ BLE5-04: GooseBLEDataValidator Swift struct — structural frame validation before Rust bridge — v10.0 (Phase 68)
+- ✓ HAP-01: buzz(loops:) primitive via BLE cmd 0x13 on GooseBLEClient — v10.0 (Phase 70)
+- ✓ HAP-03: Smart alarm UI in CoachSleepRouteView + writeAlarmCommand + buzz(loops:2) confirmation — v10.0 (Phase 73)
+- ✓ FEAT-03: NotificationScheduler actor — sleep sync / workout detection / WHOOP battery ≤ 20% notifications — v10.0 (Phase 71)
+- ✓ DATA-03: Stress/ANS tiles, TrendsDashboardView, ManualWorkoutEntrySheet on Phase 69 tables — v10.0 (Phase 72)
+- ✓ DATA-04: HeartRateSeriesStore.decimatedSamples — stride/LTTB HR decimation for long sessions — v10.0 (Phase 71)
+
+Known deferred (v10.0): BLE5-01/02 (hardware-gated — real WHOOP 5.0), HAP-02/DATA-02 (deferred), HAP-04 (RE-gated — BTSnoop + Ghidra), FEAT-01/02/ARCH-01 (partial), DATA-01 (schema migrated, Swift wiring partial)
+
+### Validated (v11.0)
+
+- ✓ Fork PR integration: UUID hiding in advanced sections, imperial/metric units, English source localisation, ChatGPT auth fix — v11.0 (PR-INT-01,03,04,05)
+- ✓ Fork PR BLE/Sync: firmware-update device-info retry, honest warm-up progress, historical sync donut + protocol-driven completion — v11.0 (PR-INT-02,06,07)
+- ✓ Upstream PR merge: main-thread offload, async FFI bridge calls, display-safety filter (scroll jitter eliminated) — v11.0 (PR-UP-01,02,03)
+- ✓ Codebase map: 7 documents in `.planning/codebase/` covering architecture/stack/quality/concerns — v11.0 (AUDIT-01,02,03)
+- ✓ Schema v21: covering indexes on metricSeries/journal/workout/appleDaily; lazy bridge init; BLE auth retry 2.5s — v11.0 (PERF-01,02,BLE-REL-01)
+- ✓ Debug 3-tab split, Logs & Export rename, Breathe haptics (buzz/phase), live workout strain accumulator — v11.0 (POL-01,02,DEF-01,02)
+- ✓ Resting HR floor: 30 bpm minimum in metric_features.rs (closes #130) — v11.0 (BUG-HR-01)
+- ✓ Battery fix: R22 battery_pct in compact summary; 0xFF guard on 2A19 (closes #149) — v11.0 (BUG-BAT-01)
+- ✓ HealthKit import persistence: scalars + 90-day history persisted to metric_series; restored on launch (closes #150) — v11.0 (BUG-HK-01)
+
+Known deferred: Ph74/75 BLE device-gate tests; CAPSENSE-01, HAP-04, BLE5-01/02 hardware gates
+
+### Active (v12.0 — TBD)
+
+_(Next milestone not yet defined — run `/gsd-new-milestone` to begin.)_
 
 ### Deferred (hardware gate — sem device físico)
 
@@ -181,19 +194,12 @@ The user must be able to capture WHOOP data on iPhone and have it persisted auto
 | Google OAuth via WKWebView (no SDK) | Zero external dependency; user-supplied client_id; PKCE mandatory | ✓ Good — v4.0 |
 | Inline L10N gap closure (9 strings, no new phase) | Faster than planning a new phase for 9-string fix | ✓ Good — v4.0 |
 
-## Current Milestone: v10.0 Protocol Parity, Haptics & Feature Completeness
+## Current Milestone: v11.0 — TBD
 
-**Goal:** Close WHOOP 5.0 protocol gaps (R22/v18 packets, historical manager refactor), activate haptic hardware commands on the strap (buzz, Breathe, smart alarm, wake-window), and deliver the deferred feature completeness items from v9.0 seeds (Coach VOW, NoopApp features, iOS notifications, SQLite tables, Stress/Trends screens, HR decimation, service layer DI).
-
-**Target features:**
-- BLE5-01 to BLE5-04: WHOOP 5.0 R22/v18 protocol support + GooseBLEHistoricalManager + data validator
-- HAP-01 to HAP-04: Haptic buzz primitive + Breathe screen + smart alarm + wake-window engine
-- FEAT-01 to FEAT-03: Coach VOW messages + NoopApp features + iOS local notifications
-- DATA-01 to DATA-04: 4 SQLite tables + realtime strain + Stress/Trends screens + HR decimation
-- ARCH-01: Protocol-based service layer + mock infrastructure
+_(Not yet defined. Run `/gsd-new-milestone` to start requirements and roadmap for v11.0.)_
 
 ---
-*Last updated: 2026-06-11 after v9.0 milestone*
+*Last updated: 2026-06-13 after v10.0 milestone*
 
 ## Evolution
 

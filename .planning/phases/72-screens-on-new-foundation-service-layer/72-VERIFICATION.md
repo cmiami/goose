@@ -1,18 +1,21 @@
 ---
 phase: 72-screens-on-new-foundation-service-layer
 verified: 2026-06-12T00:00:00Z
-status: human_needed
+status: passed
 score: 4/4 must-haves verified
 overrides_applied: 0
 human_verification:
   - test: "Open Health tab and navigate to Trends from the Explore Health section"
     expected: "TrendsDashboardView loads, shows three sparkline cards (Recovery, HRV, Strain) with 7-day axis labels; cards show 'No data for the last 7 days' if the metric_series table is empty"
+    result: "PASS — Trends navigates correctly; shows Recovery, HRV, Strain cards each with 'No data for the last 7 days'; no crash (2026-06-13 simulator)"
     why_human: "UI rendering and navigation reachability cannot be verified by grep; requires a running simulator"
   - test: "Open Health > Stress tab and scroll to the ANS Balance section"
     expected: "Two stat tiles appear — HRV (RMSSD) in ms and Resting HR in bpm — between the BreakdownSection and the Trends SleepV2SectionHeader"
+    result: "PASS — 'ANS Balance' section header and two side-by-side tiles (HRV RMSSD: No data, Resting HR: No data) visible after scrolling past Breakdown (2026-06-13 simulator)"
     why_human: "Visual layout and stat tile data population from HRVSeriesStore/HeartRateSeriesStore require a live simulator session"
   - test: "Tap the Log Workout button (accessible from the Manual Workout Entry entry point)"
     expected: "ManualWorkoutEntrySheet modal appears; user can pick a sport, adjust duration via Stepper, select perceived effort 1–10 via EffortScaleSelector; tapping Log calls workout.upsert and dismisses the sheet"
+    result: "PASS — Log Workout toolbar button opens sheet with Sport picker (Run default), Duration stepper (30 min), Effort selector (1–9+ with 5 highlighted orange); Cancel dismisses (2026-06-13 simulator)"
     why_human: "Sheet presentation, Stepper interaction, EffortScaleSelector tap behaviour, and bridge call on submit require interactive simulator testing"
 ---
 

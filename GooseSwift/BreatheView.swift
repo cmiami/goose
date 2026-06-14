@@ -126,6 +126,7 @@ struct BreatheView: View {
           withAnimation(.easeInOut(duration: BreathePhase.duration)) { circleScale = 0.6 }
         }
         try? await Task.sleep(for: .seconds(BreathePhase.duration))
+        guard !Task.isCancelled else { break }
       } while !Task.isCancelled
     }
   }
@@ -133,7 +134,7 @@ struct BreatheView: View {
   private func stopSession() {
     phaseTask?.cancel()
     phaseTask = nil
-    isRunning = false
+    isRunning = false   // set after cancel so UI state trails the task lifecycle
     currentPhase = .inhale
     withAnimation(.easeInOut(duration: 0.4)) { circleScale = 0.6 }
   }

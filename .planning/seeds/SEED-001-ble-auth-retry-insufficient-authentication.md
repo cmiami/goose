@@ -1,6 +1,7 @@
 ---
 id: SEED-001
-status: dormant
+status: resolved
+implemented_in: Phase 78 (BLE auth retry, BLE-REL-01)
 planted: 2026-06-13
 planted_during: v10.0 / Phase 68 shipped
 trigger_when: when fixing issue #117 authentication error or any BLE write reliability work

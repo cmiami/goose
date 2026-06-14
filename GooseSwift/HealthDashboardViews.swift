@@ -319,18 +319,28 @@ struct HealthRouteShortcutCard: View {
 
 struct HealthRouteDetailView: View {
   let route: HealthRoute
-  @State private var store: HealthDataStore
+  var store: HealthDataStore
 
+  /// Production init: caller supplies the ambient store so this view shares
+  /// the same HealthDataStore instance as the rest of the navigation stack.
+  init(route: HealthRoute, store: HealthDataStore) {
+    self.route = route
+    self.store = store
+  }
+
+#if DEBUG
+  /// Preview-only init: creates a fresh isolated store and applies preview state.
+  /// Never use in production code paths — the store created here is orphaned
+  /// from the ambient packetScoreStatus and catalog state.
   init(route: HealthRoute, previewState: HealthPreviewState? = nil) {
     self.route = route
-    let store = HealthDataStore()
-#if DEBUG
+    let previewStore = HealthDataStore()
     if let previewState {
-      store.applyPreviewState(previewState)
+      previewStore.applyPreviewState(previewState)
     }
-#endif
-    _store = State(initialValue: store)
+    self.store = previewStore
   }
+#endif
 
   var body: some View {
     HealthRouteDestinationView(route: route, store: store)

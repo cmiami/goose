@@ -319,6 +319,44 @@ extension GooseBLEClient: CBPeripheralDelegate {
     }
 
     if let error {
+      // BLE-REL-01: on insufficientAuthentication, schedule a single retry after 2.5s.
+      // The WHOOP pairing process occasionally triggers this on the first write after
+      // reconnect; a short delay allows the authentication handshake to complete.
+      // The original write data is not available here via CBPeripheralDelegate, so the
+      // retry surfaces a user-visible actionable error on second failure rather than
+      // replaying the exact bytes. Max one retry — no infinite loop possible.
+      if let attError = error as? CBATTError, attError.code == .insufficientAuthentication {
+        if !authRetryPending {
+          authRetryPending = true
+          record(level: .warn, source: "ble", title: "write.auth.retry.scheduled", body: characteristic.uuid.uuidString)
+          DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self else { return }
+            self.authRetryPending = false
+            // Retry path: notify the system the auth challenge resolved. If the pending
+            // command is still active it will be retried by the caller when the characteristic
+            // becomes writable again after re-pairing. Emit an actionable error so the user
+            // knows to reconnect if the issue persists.
+            self.updateConnectionState("Authentication failed — please reconnect WHOOP")
+            self.record(
+              level: .error,
+              source: "ble",
+              title: "write.auth.retry.failed",
+              body: "insufficientAuthentication persists on \(characteristic.uuid.uuidString); user action required"
+            )
+          }
+          return
+        }
+        // Second failure after the retry window: reset flag and fall through to show error.
+        authRetryPending = false
+        updateConnectionState("Authentication failed — please reconnect WHOOP")
+        record(
+          level: .error,
+          source: "ble",
+          title: "write.auth.failed",
+          body: "insufficientAuthentication (retry exhausted) on \(characteristic.uuid.uuidString)"
+        )
+        return
+      }
       record(level: .error, source: "ble", title: "write.failed", body: "\(characteristic.uuid.uuidString) \(error.localizedDescription)")
       if isHistoricalSyncing && characteristic.uuid == commandCharacteristic?.uuid {
         failHistoricalSync("Write to \(characteristic.uuid.uuidString) failed during historical sync: \(error.localizedDescription)")
@@ -333,6 +371,7 @@ extension GooseBLEClient: CBPeripheralDelegate {
         failAllDebugCommands("Write to \(characteristic.uuid.uuidString) failed during debug command: \(error.localizedDescription)")
       }
     } else {
+      authRetryPending = false
       record(source: "ble", title: "write.accepted", body: characteristic.uuid.uuidString)
     }
   }

@@ -94,6 +94,8 @@ extension GooseAppModel {
   }
 
   func applyHeartRateTimelineSnapshot(_ snapshot: HeartRateTimelineSnapshot) {
+    // Equality guard: the pipeline fires every 1 s; avoid a spurious objectWillChange
+    // (and full-view re-render of all GooseAppModel observers) when the data is unchanged.
     if snapshot.ranges != heartRateHourlyRanges {
       heartRateHourlyRanges = snapshot.ranges
     }

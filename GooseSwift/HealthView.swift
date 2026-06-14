@@ -67,7 +67,7 @@ struct HealthView: View {
       }
     }
     .sheet(isPresented: $showingManualWorkout) {
-      ManualWorkoutEntrySheet(store: store)
+      ManualWorkoutEntrySheet(bridge: store.bridge, databasePath: store.databasePath)
     }
     .onAppear {
       model.recordUIAction("page.opened", detail: "Health")

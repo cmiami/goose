@@ -4652,7 +4652,7 @@ fn heart_rate_feature_from_plan(
     if plan.marker_value == 0 {
         return Ok(None);
     }
-    if !(25..=240).contains(&plan.marker_value) {
+    if !(30..=240).contains(&plan.marker_value) {
         quality_flags.insert("heart_rate_marker_outside_plausible_range".to_string());
         return Ok(None);
     }

@@ -2,6 +2,8 @@ import SwiftUI
 
 struct MoreRawExportView: View {
   @ObservedObject var store: MoreDataStore
+  @State private var showExportPresetSheet = false
+  @State private var sqliteDBSizeLabel = ""
 
   var body: some View {
     List {
@@ -61,11 +63,29 @@ struct MoreRawExportView: View {
         .disabled(store.localExportInProgress)
 
         Button {
-          store.runRawExport()
+          sqliteDBSizeLabel = store.fetchSQLiteDBSizeLabel()
+          showExportPresetSheet = true
         } label: {
           Label("Export", systemImage: "square.and.arrow.up")
         }
         .disabled(!store.canRunRawExport || store.rawExportInProgress)
+        .confirmationDialog("Choose Export Preset", isPresented: $showExportPresetSheet, titleVisibility: .visible) {
+          Button("Frames & Metrics") {
+            store.runRawExport(preset: .framesAndMetrics)
+          }
+          Button("Full Diagnostic") {
+            store.runRawExport(preset: .fullDiagnostic)
+          }
+          Button("Include Database\(sqliteDBSizeLabel)") {
+            store.runRawExport(preset: .includeDatabase)
+          }
+          Button("Custom (current settings)") {
+            store.runRawExport()
+          }
+          Button("Cancel", role: .cancel) {}
+        } message: {
+          Text("Frames & Metrics: decoded data only\nFull Diagnostic: + raw evidence & commands\nInclude Database: + SQLite copy (heavy)")
+        }
 
         Button {
           store.validateExportArtifacts()

@@ -368,7 +368,7 @@ struct HRVSeriesFile: Codable {
   let samples: [HRVSamplePoint]
 }
 
-final class HRVSeriesStore {
+final class HRVSeriesStore: @unchecked Sendable {
   static let shared = HRVSeriesStore()
   static let didUpdateNotification = Notification.Name("GooseHRVSeriesStoreDidUpdate")
 

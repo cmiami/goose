@@ -48,6 +48,8 @@ final class WorkoutEntryViewModel: ObservableObject {
       isSubmitting = false
       // success — caller dismisses
     } catch {
+      // Keep user-facing message brief; log details for debugging
+      print("[WorkoutEntryViewModel] submitWorkout failed: \(error)")
       errorMessage = "Could not save workout. Please try again."
       isSubmitting = false
     }
@@ -60,10 +62,10 @@ struct ManualWorkoutEntrySheet: View {
   @Environment(\.dismiss) private var dismiss
   @StateObject private var vm: WorkoutEntryViewModel
 
-  init(store: HealthDataStore) {
+  init(bridge: any GooseRustBridging, databasePath: String) {
     _vm = StateObject(wrappedValue: WorkoutEntryViewModel(
-      bridge: store.bridge,
-      databasePath: store.databasePath
+      bridge: bridge,
+      databasePath: databasePath
     ))
   }
 

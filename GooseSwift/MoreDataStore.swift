@@ -64,8 +64,8 @@ final class MoreDataStore: ObservableObject {
   @Published var rawMetricFamilies = "heart_rate,hrv,activity"
   @Published var rawAlgorithmIDs = ""
   @Published var rawAlgorithmVersions = ""
-  @Published var includeRawBytes = true
-  @Published var selectedRawFamilies: Set<String> = ["raw_evidence", "decoded_frames", "packet_timeline", "sensor_samples", "metric_features", "metric_outputs", "algorithm_runs", "local_health_metrics", "sqlite"]
+  @Published var includeRawBytes = false
+  @Published var selectedRawFamilies: Set<String> = ["raw_evidence", "decoded_frames", "packet_timeline", "sensor_samples", "metric_features", "metric_outputs", "algorithm_runs", "local_health_metrics"]
   @Published var rawExportStatus = "No export yet"
   @Published var rawExportInProgress = false
   @Published var rawBundlePath = "No bundle"
@@ -437,12 +437,51 @@ final class MoreDataStore: ObservableObject {
     }
   }
 
+  enum ExportPreset {
+    case framesAndMetrics
+    case fullDiagnostic
+    case includeDatabase
+    case custom
+
+    var families: Set<String> {
+      switch self {
+      case .framesAndMetrics:
+        return ["decoded_frames", "packet_timeline", "sensor_samples", "metric_features", "metric_outputs", "algorithm_runs", "local_health_metrics"]
+      case .fullDiagnostic:
+        return ["raw_evidence", "decoded_frames", "packet_timeline", "sensor_samples", "metric_features", "metric_outputs", "algorithm_runs", "local_health_metrics", "command_validation"]
+      case .includeDatabase:
+        return ["raw_evidence", "decoded_frames", "packet_timeline", "sensor_samples", "metric_features", "metric_outputs", "algorithm_runs", "local_health_metrics", "command_validation", "sqlite"]
+      case .custom:
+        return []
+      }
+    }
+
+    var rawBytes: Bool { self == .includeDatabase }
+  }
+
+  func fetchSQLiteDBSizeLabel() -> String {
+    guard !databasePath.isEmpty,
+          let attrs = try? FileManager.default.attributesOfItem(atPath: databasePath),
+          let bytes = attrs[.size] as? Int64 else { return "" }
+    let mb = Double(bytes) / 1_048_576
+    if mb > 20 { return " (\(Int(mb))MB — OOM risk)" }
+    return " (\(Int(mb))MB)"
+  }
+
   var canRunRawExport: Bool {
     databaseExists && rawExportWindowIssueSummary() == nil && !selectedRawFamilies.isEmpty
   }
 
+  func runRawExport(preset: ExportPreset) {
+    performRawExport(families: preset.families, rawBytes: preset.rawBytes)
+  }
+
   func runRawExport() {
-    guard canRunRawExport else {
+    performRawExport(families: selectedRawFamilies, rawBytes: includeRawBytes)
+  }
+
+  private func performRawExport(families: Set<String>, rawBytes: Bool) {
+    guard databaseExists && rawExportWindowIssueSummary() == nil && !families.isEmpty else {
       rawExportStatus = rawExportWindowIssueSummary() ?? "No database or data family selected"
       return
     }
@@ -470,9 +509,9 @@ final class MoreDataStore: ObservableObject {
       "end": rawExportEnd,
       "app_version": Self.appVersion,
       "core_version": coreVersionStatus,
-      "include_sqlite": selectedRawFamilies.contains("sqlite"),
-      "data_families": Array(selectedRawFamilies).sorted(),
-      "include_raw_bytes": includeRawBytes,
+      "include_sqlite": families.contains("sqlite"),
+      "data_families": Array(families).sorted(),
+      "include_raw_bytes": rawBytes,
       "capture_session_ids": Self.csvValues(rawCaptureSessions),
       "packet_type_names": Self.csvValues(rawPacketTypes),
       "sensor_source_signals": Self.csvValues(rawSensorSignals),
@@ -503,7 +542,8 @@ final class MoreDataStore: ObservableObject {
     privacyLintStatus = "Not linted"
     sanitizedPrivacyStatus = "No sanitized copy"
 
-    DispatchQueue.global(qos: .userInitiated).async {
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      guard let self else { return }
       do {
         let bridge = GooseRustBridge()
         let value = try bridge.request(method: "export.raw_timeframe", args: args)
@@ -549,7 +589,8 @@ final class MoreDataStore: ObservableObject {
           bundlePath: bundlePath,
           zipPath: finishedZipPath
         )
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+          guard let self else { return }
           let status = Self.passSummary(value, fallback: "Export completed")
           self.rawExportInProgress = false
           self.rawExportStatus = status
@@ -569,7 +610,8 @@ final class MoreDataStore: ObservableObject {
           self.sanitizedPrivacyStatus = artifactValidation.sanitizedPrivacy
         }
       } catch {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+          guard let self else { return }
           let message = Self.errorSummary(error)
           self.rawExportInProgress = false
           self.rawExportStatus = "Export failed: \(message)"

@@ -383,7 +383,18 @@ extension GooseAppModel {
       "parse queued \(frames.count) frame\(frames.count == 1 ? "" : "s") | parseQ \(queueDepth) hwm \(highWatermark)"
     )
     notificationParseQueue.async {
-      let frameHexes = frames.map(\.hex)
+      let deviceID = ble.activeDeviceIdentifier
+      let acceptedFrames = frames.filter { ble.dataValidator.validate(frameHex: $0.hex, deviceID: deviceID) }
+      let rejectedCount = frames.count - acceptedFrames.count
+      if rejectedCount > 0 {
+        ble.record(
+          level: .warn,
+          source: "ble.validator",
+          title: "frame.validator.rejected",
+          body: "rejected=\(rejectedCount) accepted=\(acceptedFrames.count) total=\(frames.count)"
+        )
+      }
+      let frameHexes = acceptedFrames.map(\.hex)
       let (parseResults, bridgeTiming, batchTiming) = parser.parseBatch(frameHexes: frameHexes, deviceType: deviceType)
       var mainResults: [ParsedNotificationFrameResult] = []
       var offMainDataSignalCount = 0
@@ -533,6 +544,7 @@ extension GooseAppModel {
         packetType: nil,
         healthPacketFamily: nil,
         heartRateBPM: nil,
+        r22BatteryPct: nil,
         movementSample: nil,
         whoopEvent: nil,
         dataSignal: nil
@@ -550,6 +562,7 @@ extension GooseAppModel {
           ?? parsed.map { healthPacketCaptureFamily(for: $0, capturedAt: event.capturedAt) }
         : nil,
       heartRateBPM: compact?.heartRateBPM ?? parsed.flatMap(extractHeartRate),
+      r22BatteryPct: compact?.r22BatteryPct,
       movementSample: extractMovementPacket(
         from: parsed ?? [:],
         compact: compact,
@@ -568,6 +581,7 @@ extension GooseAppModel {
   ) -> Bool {
     if interpretation.healthPacketFamily != nil
       || interpretation.heartRateBPM != nil
+      || interpretation.r22BatteryPct != nil
       || interpretation.movementSample != nil
       || interpretation.whoopEvent != nil
       || interpretation.dataSignal != nil {
@@ -643,6 +657,9 @@ extension GooseAppModel {
         capturedAt: event.capturedAt,
         minimumInterval: 1
       )
+    }
+    if let batteryPct = interpretation.r22BatteryPct, batteryPct <= 100 {
+      ble.applyBatteryLevel(batteryPct, capturedAt: event.capturedAt, sourceTitle: "r22.battery")
     }
     if let sample = interpretation.movementSample {
       handleMovementPacket(sample)
@@ -800,6 +817,8 @@ extension GooseAppModel {
   }
 
   nonisolated func gooseFrames(in data: Data, event: GooseNotificationEvent) -> FrameReassemblyResult {
+    frameReassemblyLock.lock()
+    defer { frameReassemblyLock.unlock() }
     let key = frameReassemblyKey(for: event)
     let hadBufferedData = frameReassemblyBuffers[key]?.isEmpty == false
     var bytes = Array(frameReassemblyBuffers[key] ?? Data())

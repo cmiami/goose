@@ -11,6 +11,20 @@
       "iconURL": "https://raw.githubusercontent.com/tigercraft4/goose/main/GooseSwift/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png",
       "versions": [
         {
+          "version": "11.0",
+          "date": "2026-06-14",
+          "localizedDescription": "- Resting HR floor: 30 bpm minimum (closes #130)\n- Battery fix: R22 battery level for Gen5; Gen4 0xFF guard (closes #149)\n- HealthKit import persistence to SQLite (closes #150)\n- Debug 3-tab split, Logs & Export rename, Breathe haptics, live strain\n- Schema v21 indexes, lazy init, BLE auth retry\n- Fork + upstream PR integration (units, localisation, BLE recovery, sync donut)",
+          "downloadURL": "https://github.com/tigercraft4/goose/releases/download/v11.0/GooseSwift-v11.0-unsigned.ipa",
+          "size": 12400928
+        },
+        {
+          "version": "10.0",
+          "date": "2026-06-14",
+          "localizedDescription": "- WHOOP 5.0 R22 realtime + v18 historical protocol\n- BLE manager refactor + data validator\n- Haptic buzz primitive + BreatheView\n- Coach VOW nudges, Interval Timer, Metric Explorer, notifications\n- Stress/ANS, Trends, Manual Workout screens\n- Smart alarm UI + wake-window RE-gated stub\n- Schema v20 (4 new SQLite tables)",
+          "downloadURL": "https://github.com/tigercraft4/goose/releases/download/v10.0/GooseSwift-v10.0-unsigned.ipa",
+          "size": 12398907
+        },
+        {
           "version": "9.0",
           "date": "2026-06-11",
           "localizedDescription": "- chore: archive v9.0 milestone — BLE Reliability & Protocol Parity (5/6 phases shipped)\n- feat(about): add License section with GPL v3, copyright, source link; rename Model → Device\n- docs(v9.0): milestone audit — passed (5/6 phases, Phase 66 hardware-gated)",

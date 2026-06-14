@@ -84,6 +84,7 @@ struct NotificationFrameCompactSummary {
   let bodyKind: String?
   let bodyByteCount: Int?
   let heartRateBPM: Int?
+  let r22BatteryPct: Int?
   let r17Flags: Int?
   let r17SampleCount: Int?
   let r17ParsedSampleCount: Int?
@@ -112,6 +113,7 @@ struct NotificationFrameCompactSummary {
     bodyKind = raw["body_kind"] as? String
     bodyByteCount = NotificationFrameParser.intValue(raw["body_byte_count"])
     heartRateBPM = NotificationFrameParser.intValue(raw["heart_rate"])
+    r22BatteryPct = NotificationFrameParser.intValue(raw["r22_battery_pct"])
     r17Flags = NotificationFrameParser.intValue(raw["r17_flags"])
     r17SampleCount = NotificationFrameParser.intValue(raw["r17_sample_count"])
     r17ParsedSampleCount = NotificationFrameParser.intValue(raw["r17_parsed_sample_count"])
@@ -132,6 +134,7 @@ struct NotificationFrameInterpretation {
   let packetType: Int?
   let healthPacketFamily: HealthPacketCaptureFamily?
   let heartRateBPM: Int?
+  let r22BatteryPct: Int?
   let movementSample: MovementPacketSample?
   let whoopEvent: WhoopEventSample?
   let dataSignal: WhoopDataSignalSample?

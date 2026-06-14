@@ -63,7 +63,10 @@ final class GooseAppModel {
   let packetMonitor = PacketMonitorModel()
   let activitySession = ActivitySessionModel()
   let activityLocationTracker = ActivityLocationTracker()
-  let rust = GooseRustBridge()
+  // lazy: defers GooseRustBridge() construction until first access so the first SwiftUI
+  // frame renders before the FFI bridge is initialised. GooseRustBridge is stateless and
+  // not observed by SwiftUI, so @ObservationIgnored is required here.
+  @ObservationIgnored lazy var rust = GooseRustBridge()
   let notificationFrameParser = NotificationFrameParser()
   let notificationIngestQueue = DispatchQueue(label: "com.goose.swift.notification-ingest", qos: .utility)
   let notificationIngestStateLock = NSLock()
@@ -165,6 +168,11 @@ final class GooseAppModel {
   var lastWhoopEventStatusUpdatedAt = Date.distantPast
   var activityTimelineRefreshGeneration = 0
   var skippedNotificationDiagnostics = SkippedNotificationDiagnostics()
+  // frameReassemblyLock guards frameReassemblyBuffers. gooseFrames() is nonisolated and
+  // called from notificationIngestQueue (a serial queue), so in practice only one call
+  // runs at a time; the lock makes the safety contract explicit and guards against any
+  // future change to the queue's concurrency attributes.
+  let frameReassemblyLock = NSLock()
   @ObservationIgnored nonisolated(unsafe) var frameReassemblyBuffers: [String: Data] = [:]
   var lastNotificationEvent: GooseNotificationEvent?
   let autoStartHealthPacketCaptureOnReady: Bool = {
