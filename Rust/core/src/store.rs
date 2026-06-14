@@ -1753,11 +1753,12 @@ impl GooseStore {
             CREATE TABLE IF NOT EXISTS optical_samples (
                 device_id TEXT NOT NULL,
                 ts REAL NOT NULL,
+                frame_seq INTEGER NOT NULL DEFAULT 0,
                 sample_index INTEGER NOT NULL,
                 value INTEGER NOT NULL,
                 synced INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-                UNIQUE(device_id, ts, sample_index)
+                UNIQUE(device_id, ts, frame_seq, sample_index)
             );
 
             CREATE INDEX IF NOT EXISTS idx_optical_samples_device_ts ON optical_samples(device_id, ts);
@@ -7566,7 +7567,7 @@ impl GooseStore {
         let mut sig_quality_rows: Vec<(f64, i64)> = Vec::new(); // (ts, quality)
         // Raw R17 optical waveform: one (ts, sample_index, value) per i16 sample. The
         // live PPG that feeds the unverified SpO2/HRV decode — collected verbatim.
-        let mut optical_rows: Vec<(f64, i64, i64)> = Vec::new(); // (ts, sample_index, value)
+        let mut optical_rows: Vec<(f64, i64, i64, i64)> = Vec::new(); // (ts, frame_seq, sample_index, value)
 
         for frame in &frames {
             if !frame.header_crc_valid || !frame.payload_crc_valid {
@@ -7653,10 +7654,15 @@ impl GooseStore {
                     // Real-time optical PPG waveform. Prefer the full sample array;
                     // fall back to the preview when the parser only kept a preview.
                     // Stored verbatim (unscaled i16 ADC); the decode stays unverified.
+                    // frame_seq (the packet sequence) distinguishes R17 frames that share
+                    // the same whole-second ts, so samples from different frames in one
+                    // second cannot collide on (ts, sample_index) and be dropped by the
+                    // INSERT OR IGNORE.
                     if let Some(ts) = ts_unix {
+                        let frame_seq = frame.sequence.unwrap_or(0);
                         let values = series.full_samples.as_ref().unwrap_or(&series.preview);
                         for (index, &value) in values.iter().enumerate() {
-                            optical_rows.push((ts, index as i64, value as i64));
+                            optical_rows.push((ts, frame_seq, index as i64, value as i64));
                         }
                     }
                 }
@@ -7717,10 +7723,10 @@ impl GooseStore {
                 )?;
             }
             let mut optical_inserted = 0usize;
-            for (ts, sample_index, value) in &optical_to_insert {
+            for (ts, frame_seq, sample_index, value) in &optical_to_insert {
                 optical_inserted += store.conn.execute(
-                    "INSERT OR IGNORE INTO optical_samples (device_id, ts, sample_index, value) VALUES (?1, ?2, ?3, ?4)",
-                    params![device_id_owned, ts, sample_index, value],
+                    "INSERT OR IGNORE INTO optical_samples (device_id, ts, frame_seq, sample_index, value) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![device_id_owned, ts, frame_seq, sample_index, value],
                 )?;
             }
             Ok(BackfillReport {
@@ -9887,7 +9893,10 @@ mod sync_methods_tests {
         assert_eq!(report.spo2_inserted, 1, "one spo2 candidate row collected");
         assert_eq!(report.skin_temp_inserted, 1, "one skin-temp candidate row");
         assert_eq!(report.resp_inserted, 1, "one resp candidate row collected");
-        assert_eq!(report.sig_quality_inserted, 1, "one sig-quality row collected");
+        assert_eq!(
+            report.sig_quality_inserted, 1,
+            "one sig-quality row collected"
+        );
 
         // Raw verbatim values must land in the sample tables (unscaled).
         let (red, ir): (i64, i64) = store
@@ -9997,7 +10006,10 @@ mod sync_methods_tests {
         assert_eq!(report.spo2_inserted, 0, "no spo2 without skin contact");
         assert_eq!(report.skin_temp_inserted, 0, "no skin-temp without contact");
         assert_eq!(report.resp_inserted, 0, "no resp without skin contact");
-        assert_eq!(report.sig_quality_inserted, 0, "no sig-quality without contact");
+        assert_eq!(
+            report.sig_quality_inserted, 0,
+            "no sig-quality without contact"
+        );
     }
 
     #[test]
@@ -10065,7 +10077,10 @@ mod sync_methods_tests {
         let report = store
             .backfill_streams_from_decoded_frames("dev-1", 4900.0, 5100.0)
             .unwrap();
-        assert_eq!(report.optical_inserted, 4, "all 4 optical samples collected");
+        assert_eq!(
+            report.optical_inserted, 4,
+            "all 4 optical samples collected"
+        );
         // Verify a specific sample landed verbatim with its intra-frame index.
         let value: i64 = store
             .conn
@@ -10080,7 +10095,108 @@ mod sync_methods_tests {
         let report2 = store
             .backfill_streams_from_decoded_frames("dev-1", 4900.0, 5100.0)
             .unwrap();
-        assert_eq!(report2.optical_inserted, 0, "optical backfill is idempotent");
+        assert_eq!(
+            report2.optical_inserted, 0,
+            "optical backfill is idempotent"
+        );
+    }
+
+    // Insert one R17 optical frame with a chosen packet sequence and sample set.
+    fn insert_test_r17_frame(
+        store: &GooseStore,
+        suffix: &str,
+        ts_secs: u32,
+        sequence: i64,
+        samples: Vec<i16>,
+    ) {
+        let evidence_id = format!("r17-evidence-{suffix}");
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO raw_evidence \
+                 (evidence_id, source, captured_at, device_model, payload_hex, sha256, sensitivity) \
+                 VALUES (?1, 'test', '1970-01-01T01:23:20.000Z', 'test-device', '', '', 'standard')",
+                params![evidence_id],
+            )
+            .unwrap();
+        let series = crate::protocol::I16SeriesSummary {
+            name: "r17_samples".to_string(),
+            offset: 26,
+            expected_count: samples.len(),
+            parsed_count: samples.len(),
+            min: samples.iter().copied().min(),
+            max: samples.iter().copied().max(),
+            sum: samples.iter().map(|&v| v as i64).sum(),
+            preview: samples.clone(),
+            full_samples: Some(samples.clone()),
+        };
+        let body = DataPacketBodySummary::R17OpticalOrLabradorFiltered {
+            flags: Some(0),
+            flag_bit_9: Some(false),
+            flag_bit_11: Some(false),
+            channels_or_gain: vec![1, 2],
+            sample_count: Some(samples.len() as u16),
+            samples: Some(series),
+            warnings: vec![],
+        };
+        let payload = ParsedPayload::DataPacket {
+            packet_k: Some(17),
+            domain: None,
+            status_or_stream: None,
+            counter_or_page: None,
+            timestamp_seconds: Some(ts_secs),
+            timestamp_subseconds: None,
+            hr_marker_offset: None,
+            hr_present_marker: None,
+            body_offset: 0,
+            body_hex: String::new(),
+            body_summary: Some(body),
+            warnings: vec![],
+        };
+        let payload_json = serde_json::to_string(&payload).unwrap();
+        let frame_id = format!("r17-frame-{suffix}");
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO decoded_frames \
+                 (frame_id, evidence_id, device_type, raw_len, header_len, declared_len, \
+                  payload_hex, payload_crc_hex, header_crc_valid, payload_crc_valid, \
+                  packet_type, packet_type_name, sequence, command_or_event, \
+                  parsed_payload_json, parser_version, warnings_json) \
+                 VALUES (?1, ?2, 'whoop5', 0, 0, 0, '', '', 1, 1, 17, 'REALTIME_DATA', ?3, 0, ?4, 'test', '[]')",
+                params![frame_id, evidence_id, sequence, payload_json],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_sync_backfill_optical_same_second_distinct_frames_no_collapse() {
+        let store = make_store();
+        // Two R17 frames in the SAME whole second (ts=5000) with different packet
+        // sequences and overlapping sample indices. Before frame_seq joined the key
+        // these collapsed on (ts, sample_index) and half the waveform was dropped;
+        // now all four samples survive.
+        insert_test_r17_frame(&store, "a", 5000, 10, vec![100, 200]);
+        insert_test_r17_frame(&store, "b", 5000, 20, vec![300, 400]);
+        let report = store
+            .backfill_streams_from_decoded_frames("dev-1", 4900.0, 5100.0)
+            .unwrap();
+        assert_eq!(report.optical_inserted, 4, "both frames' samples collected");
+        let total: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM optical_samples", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 4, "no same-second collision");
+        // Frame B's samples are distinguishable by frame_seq even though ts matches.
+        let v: i64 = store
+            .conn
+            .query_row(
+                "SELECT value FROM optical_samples WHERE ts=5000.0 AND frame_seq=20 AND sample_index=0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, 300);
     }
 
     #[test]
