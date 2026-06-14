@@ -8,4 +8,3 @@ protocol GooseBLEManaging: AnyObject {
   func startScanning()
   func stopScanning()
 }
-

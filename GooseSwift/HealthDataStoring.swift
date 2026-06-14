@@ -13,4 +13,3 @@ extension HealthDataStoring {
     try await fetchTrendsSeries(metricName: metricName, days: 7)
   }
 }
-

@@ -35,7 +35,7 @@ MoreDebugView refactored into a 3-tab layout (Status/Capture/Research); More nav
 ## Tasks
 
 ### POL-01: Debug tab into 3 focused tabs
-**Status:** Complete  
+**Status:** Complete
 **Commit:** a31c353
 
 Restructured `MoreDebugView` (previously a monolithic 644-line List) into a `TabView` with three private sub-views:
@@ -46,7 +46,7 @@ Restructured `MoreDebugView` (previously a monolithic 644-line List) into a `Tab
 The Connst and Research BT Commands sections were removed.
 
 ### POL-02: Rename Support → Logs & Export, move to Developer hub
-**Status:** Complete  
+**Status:** Complete
 **Commit:** 1ec92c0
 
 Changes made:
