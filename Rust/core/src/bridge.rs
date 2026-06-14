@@ -4263,6 +4263,9 @@ fn sync_backfill_streams_bridge(args: SyncBackfillStreamsArgs) -> GooseResult<se
         "rr_inserted": report.rr_inserted,
         "events_inserted": report.events_inserted,
         "battery_inserted": report.battery_inserted,
+        "spo2_inserted": report.spo2_inserted,
+        "skin_temp_inserted": report.skin_temp_inserted,
+        "resp_inserted": report.resp_inserted,
     }))
 }
 

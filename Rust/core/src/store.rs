@@ -733,6 +733,12 @@ pub struct BackfillReport {
     pub rr_inserted: usize,
     pub events_inserted: usize,
     pub battery_inserted: usize,
+    #[serde(default)]
+    pub spo2_inserted: usize,
+    #[serde(default)]
+    pub skin_temp_inserted: usize,
+    #[serde(default)]
+    pub resp_inserted: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7525,6 +7531,15 @@ impl GooseStore {
 
         let mut hr_rows: Vec<(f64, i64)> = Vec::new();
         let mut rr_rows: Vec<(f64, i64)> = Vec::new();
+        // Raw V24 biometric candidates, collected verbatim (red/IR/raw ADC counts).
+        // These are UNVERIFIED-scale values persisted purely to build a backlog for
+        // later validation against ground truth — the readiness gate in
+        // metric_readiness.rs still blocks them from being scored or displayed, so
+        // collecting here never implies they are trustworthy. Gated on skin_contact
+        // to mirror the upload path, keeping local SQLite and the server in sync.
+        let mut spo2_rows: Vec<(f64, i64, i64)> = Vec::new(); // (ts, red, ir)
+        let mut skin_temp_rows: Vec<(f64, i64)> = Vec::new(); // (ts, raw)
+        let mut resp_rows: Vec<(f64, i64)> = Vec::new(); // (ts, raw)
 
         for frame in &frames {
             if !frame.header_crc_valid || !frame.payload_crc_valid {
@@ -7565,6 +7580,10 @@ impl GooseStore {
                     hr: v24_hr,
                     rr_intervals_ms,
                     skin_contact,
+                    spo2_red,
+                    spo2_ir,
+                    skin_temp_raw,
+                    resp_raw,
                     ..
                 } => {
                     let contact = skin_contact.unwrap_or(0) == 1;
@@ -7578,6 +7597,20 @@ impl GooseStore {
                             t += ms as f64 / 1000.0;
                         }
                     }
+                    // Raw biometric candidates — only while skin contact is established
+                    // (optical SpO2, skin-temp and respiration ADC are meaningless
+                    // off-wrist). Stored verbatim; their scaling stays unverified.
+                    if contact {
+                        if let (Some(ts), Some(red), Some(ir)) = (ts_unix, *spo2_red, *spo2_ir) {
+                            spo2_rows.push((ts, red as i64, ir as i64));
+                        }
+                        if let (Some(ts), Some(raw)) = (ts_unix, *skin_temp_raw) {
+                            skin_temp_rows.push((ts, raw as i64));
+                        }
+                        if let (Some(ts), Some(raw)) = (ts_unix, *resp_raw) {
+                            resp_rows.push((ts, raw as i64));
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -7585,6 +7618,9 @@ impl GooseStore {
 
         let hr_to_insert = hr_rows.clone();
         let rr_to_insert = rr_rows.clone();
+        let spo2_to_insert = spo2_rows.clone();
+        let skin_temp_to_insert = skin_temp_rows.clone();
+        let resp_to_insert = resp_rows.clone();
         let device_id_owned = device_id.to_string();
 
         self.immediate_transaction(|store| {
@@ -7602,11 +7638,35 @@ impl GooseStore {
                     params![device_id_owned, ts, interval_ms],
                 )?;
             }
+            let mut spo2_inserted = 0usize;
+            for (ts, red, ir) in &spo2_to_insert {
+                spo2_inserted += store.conn.execute(
+                    "INSERT OR IGNORE INTO spo2_samples (device_id, ts, red, ir, contact) VALUES (?1, ?2, ?3, ?4, 1)",
+                    params![device_id_owned, ts, red, ir],
+                )?;
+            }
+            let mut skin_temp_inserted = 0usize;
+            for (ts, raw) in &skin_temp_to_insert {
+                skin_temp_inserted += store.conn.execute(
+                    "INSERT OR IGNORE INTO skin_temp_samples (device_id, ts, raw, contact) VALUES (?1, ?2, ?3, 1)",
+                    params![device_id_owned, ts, raw],
+                )?;
+            }
+            let mut resp_inserted = 0usize;
+            for (ts, raw) in &resp_to_insert {
+                resp_inserted += store.conn.execute(
+                    "INSERT OR IGNORE INTO resp_samples (device_id, ts, raw, contact) VALUES (?1, ?2, ?3, 1)",
+                    params![device_id_owned, ts, raw],
+                )?;
+            }
             Ok(BackfillReport {
                 hr_inserted,
                 rr_inserted,
                 events_inserted: 0,
                 battery_inserted: 0,
+                spo2_inserted,
+                skin_temp_inserted,
+                resp_inserted,
             })
         })
     }
@@ -7643,6 +7703,9 @@ impl GooseStore {
                 rr_inserted,
                 events_inserted: 0,
                 battery_inserted: 0,
+                spo2_inserted: 0,
+                skin_temp_inserted: 0,
+                resp_inserted: 0,
             })
         })
     }
@@ -9677,6 +9740,184 @@ mod sync_methods_tests {
             .query_row("SELECT COUNT(*) FROM hr_samples", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1, "exactly one row after two backfill calls");
+    }
+
+    // Insert a synthetic V24History decoded frame carrying the raw biometric
+    // candidates. The ParsedPayload is built and serialised through serde so the
+    // field names match the deserializer exactly (no fragile hand-written JSON).
+    fn insert_test_v24_biometric_frame(store: &GooseStore, device_id: &str, ts_unix: u32) {
+        let evidence_id = format!("v24-evidence-{ts_unix}");
+        let captured_at = format!("1970-01-01T00:{:02}:{:02}.000Z", ts_unix / 60, ts_unix % 60);
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO raw_evidence \
+             (evidence_id, source, captured_at, device_model, payload_hex, sha256, sensitivity) \
+             VALUES (?1, 'test', ?2, 'test-device', '', '', 'standard')",
+                params![evidence_id, captured_at],
+            )
+            .unwrap();
+        let body = DataPacketBodySummary::V24History {
+            hr: Some(72),
+            rr_intervals_ms: vec![800, 810],
+            ppg_green: None,
+            ppg_red_ir: None,
+            gravity_x: None,
+            gravity_y: None,
+            gravity_z: None,
+            skin_contact: Some(1),
+            spo2_red: Some(12345),
+            spo2_ir: Some(23456),
+            skin_temp_raw: Some(4096),
+            ambient: None,
+            led1: None,
+            led2: None,
+            resp_raw: Some(512),
+            sig_quality: None,
+            gravity2_x: None,
+            gravity2_y: None,
+            gravity2_z: None,
+            warnings: vec![],
+        };
+        let payload = ParsedPayload::DataPacket {
+            packet_k: Some(40),
+            domain: None,
+            status_or_stream: None,
+            counter_or_page: None,
+            timestamp_seconds: Some(ts_unix),
+            timestamp_subseconds: None,
+            hr_marker_offset: None,
+            hr_present_marker: None,
+            body_offset: 0,
+            body_hex: String::new(),
+            body_summary: Some(body),
+            warnings: vec![],
+        };
+        let payload_json = serde_json::to_string(&payload).unwrap();
+        let frame_id = format!("v24-frame-{ts_unix}");
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO decoded_frames \
+             (frame_id, evidence_id, device_type, raw_len, header_len, declared_len, \
+              payload_hex, payload_crc_hex, header_crc_valid, payload_crc_valid, \
+              packet_type, packet_type_name, sequence, command_or_event, \
+              parsed_payload_json, parser_version, warnings_json) \
+             VALUES (?1, ?2, 'whoop5', 0, 0, 0, '', '', 1, 1, 40, 'REALTIME_DATA', 0, 0, ?3, 'test', '[]')",
+                params![frame_id, evidence_id, payload_json],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_sync_backfill_collects_v24_biometric_candidates() {
+        let store = make_store();
+        insert_test_v24_biometric_frame(&store, "dev-1", 3000);
+        let report = store
+            .backfill_streams_from_decoded_frames("dev-1", 2900.0, 3100.0)
+            .unwrap();
+        assert_eq!(report.spo2_inserted, 1, "one spo2 candidate row collected");
+        assert_eq!(report.skin_temp_inserted, 1, "one skin-temp candidate row");
+        assert_eq!(report.resp_inserted, 1, "one resp candidate row collected");
+
+        // Raw verbatim values must land in the sample tables (unscaled).
+        let (red, ir): (i64, i64) = store
+            .conn
+            .query_row(
+                "SELECT red, ir FROM spo2_samples WHERE device_id='dev-1' AND ts=3000.0",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((red, ir), (12345, 23456), "raw red/ir stored verbatim");
+        let skin: i64 = store
+            .conn
+            .query_row(
+                "SELECT raw FROM skin_temp_samples WHERE device_id='dev-1' AND ts=3000.0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(skin, 4096, "raw skin-temp ADC stored verbatim");
+
+        // Re-running is idempotent (INSERT OR IGNORE on UNIQUE(device_id, ts)).
+        let report2 = store
+            .backfill_streams_from_decoded_frames("dev-1", 2900.0, 3100.0)
+            .unwrap();
+        assert_eq!(report2.spo2_inserted, 0, "spo2 backfill is idempotent");
+        assert_eq!(report2.resp_inserted, 0, "resp backfill is idempotent");
+    }
+
+    #[test]
+    fn test_sync_backfill_skips_biometrics_without_contact() {
+        let store = make_store();
+        // Same frame but skin_contact=0 — optical/temp/resp are meaningless
+        // off-wrist, so nothing should be collected.
+        let evidence_id = "v24-nc-evidence".to_string();
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO raw_evidence \
+             (evidence_id, source, captured_at, device_model, payload_hex, sha256, sensitivity) \
+             VALUES (?1, 'test', '1970-01-01T00:00:50.000Z', 'test-device', '', '', 'standard')",
+                params![evidence_id],
+            )
+            .unwrap();
+        let body = DataPacketBodySummary::V24History {
+            hr: Some(72),
+            rr_intervals_ms: vec![],
+            ppg_green: None,
+            ppg_red_ir: None,
+            gravity_x: None,
+            gravity_y: None,
+            gravity_z: None,
+            skin_contact: Some(0),
+            spo2_red: Some(111),
+            spo2_ir: Some(222),
+            skin_temp_raw: Some(333),
+            ambient: None,
+            led1: None,
+            led2: None,
+            resp_raw: Some(444),
+            sig_quality: None,
+            gravity2_x: None,
+            gravity2_y: None,
+            gravity2_z: None,
+            warnings: vec![],
+        };
+        let payload = ParsedPayload::DataPacket {
+            packet_k: Some(40),
+            domain: None,
+            status_or_stream: None,
+            counter_or_page: None,
+            timestamp_seconds: Some(50),
+            timestamp_subseconds: None,
+            hr_marker_offset: None,
+            hr_present_marker: None,
+            body_offset: 0,
+            body_hex: String::new(),
+            body_summary: Some(body),
+            warnings: vec![],
+        };
+        let payload_json = serde_json::to_string(&payload).unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT OR IGNORE INTO decoded_frames \
+             (frame_id, evidence_id, device_type, raw_len, header_len, declared_len, \
+              payload_hex, payload_crc_hex, header_crc_valid, payload_crc_valid, \
+              packet_type, packet_type_name, sequence, command_or_event, \
+              parsed_payload_json, parser_version, warnings_json) \
+             VALUES ('v24-nc-frame', ?1, 'whoop5', 0, 0, 0, '', '', 1, 1, 40, 'REALTIME_DATA', 0, 0, ?2, 'test', '[]')",
+                params![evidence_id, payload_json],
+            )
+            .unwrap();
+        let report = store
+            .backfill_streams_from_decoded_frames("dev-1", 0.0, 100.0)
+            .unwrap();
+        assert_eq!(report.spo2_inserted, 0, "no spo2 without skin contact");
+        assert_eq!(report.skin_temp_inserted, 0, "no skin-temp without contact");
+        assert_eq!(report.resp_inserted, 0, "no resp without skin contact");
     }
 
     #[test]
